@@ -94,6 +94,18 @@ that. Here the socket reader, schedulers and I/O run on different threads.
 brew install lefthook cocogitto ktlint && lefthook install
 ```
 
+## Verifying a connection
+
+When something looks broken, check the API before debugging the gateway:
+
+```bash
+./gradlew :tools:probe                   # KR — quiet outside market hours
+./gradlew :tools:probe --args="us AAPL"  # US — usually has ticks, pre-market included
+```
+
+The probe issues its own token and opens its own socket. Only one token is valid per
+client, so **stop the running service first**, or each will keep revoking the other.
+
 ## References
 
 - Integration guide: https://openapi.tossinvest.com/openapi-docs/overview.md

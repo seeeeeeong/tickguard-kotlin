@@ -17,3 +17,9 @@ interface StatusFailure {
  * say whether token issuance is included, so the status is what is read.
  */
 fun isSourceIpRejected(error: Throwable): Boolean = (error as? StatusFailure)?.status == 403
+
+/**
+ * How much of a refusal's body an error message quotes. Enough for the reason a
+ * server gives, short of an HTML error page that would bury the log line.
+ */
+const val ERROR_BODY_EXCERPT = 200

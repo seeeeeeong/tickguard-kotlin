@@ -29,6 +29,10 @@ jobs:
       # Checked against cog.toml, the same scope list the commit-msg hook uses.
       # Passed through the environment: a title interpolated into the script
       # would be executed as shell.
-      - run: cog verify "$TITLE"
+      # cog prints an author beside the verdict and panics without one, even
+      # for a message that was never committed; the runner has no git identity.
+      - run: |
+          git config user.name github-actions
+          cog verify "$TITLE"
         env:
           TITLE: ${{ github.event.pull_request.title }}

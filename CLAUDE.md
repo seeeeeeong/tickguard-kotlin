@@ -72,6 +72,11 @@ that. Here the socket reader, schedulers and I/O run on different threads.
 - Inside a module, packages split by **feature**, not by layer.
 - Tests live in each module's `src/test/kotlin`, mirroring the production package and
   file name: `Keepalive.kt` → `KeepaliveTest.kt`.
+- The `architecture` module checks what review used to: core depends on no framework,
+  features form no cycle, nothing under `tickguard.toss` except token issuance sends a
+  request body, constants carry a KDoc, tests mirror their file. Each rule has a fixture
+  that breaks it.
+- Iteration order is behaviour (parity is checked byte for byte): no `HashMap`/`HashSet`.
 - Durations are `kotlin.time.Duration` and instants `java.time.Instant`. Epoch
   milliseconds exist only at the storage boundary.
 - Seoul time comes from `ZoneId.of("Asia/Seoul")`, never the host's default zone:

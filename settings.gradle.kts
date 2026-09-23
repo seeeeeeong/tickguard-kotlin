@@ -19,4 +19,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "tickguard"
 
-include("core", "adapters", "app", "tools")
+include("core", "adapters", "app", "tools", "architecture")

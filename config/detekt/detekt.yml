@@ -50,3 +50,21 @@ style:
         reason: 'Compares scale: 339.20 == 339.2 is false. Use compareTo, <, >= or signum().'
       - value: 'kotlin.text.toDouble'
         reason: 'Prices and volumes are decimals. Parse them as BigDecimal.'
+      # Iteration order is behaviour here: the original iterated JS Maps, which
+      # keep insertion order, and parity is checked byte for byte. mutableMapOf
+      # and mutableSetOf keep insertion order; the hash-ordered ones do not.
+      - value: 'java.util.HashMap.<init>'
+        reason: 'Iteration order is observable. Use mutableMapOf() / LinkedHashMap.'
+      - value: 'java.util.HashSet.<init>'
+        reason: 'Iteration order is observable. Use mutableSetOf() / LinkedHashSet.'
+      - value: 'kotlin.collections.hashMapOf'
+        reason: 'Iteration order is observable. Use mutableMapOf().'
+      - value: 'kotlin.collections.hashSetOf'
+        reason: 'Iteration order is observable. Use mutableSetOf().'
+      # Blocking the single engine thread stalls every consumer behind it, and
+      # the order channel is closed after two seconds of that. Each of
+      # XChange's recorded stream outages began with a block on its event loop.
+      - value: 'kotlinx.coroutines.runBlocking'
+        reason: 'Blocks a thread. Use a suspend function or a scope.'
+      - value: 'java.lang.Thread.sleep'
+        reason: 'Blocks a thread. Use delay().'

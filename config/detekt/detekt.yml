@@ -11,6 +11,11 @@ complexity:
   # most defaulted. Required parameters are still counted against the limit.
   LongParameterList:
     ignoreDefaultParameters: true
+  # compareTo and toString are contracts a type fulfils, not surface it adds.
+  # A numeric value type needs its operators plus those, and would be split
+  # for no reader's benefit to fit a count that includes them.
+  TooManyFunctions:
+    ignoreOverridden: true
 
 coroutines:
   # Tests pick real threads on purpose, to exercise a socket in real time.
@@ -38,6 +43,11 @@ naming:
     active: false
 
 style:
+  # `?: return` at the top of a function is how untrusted input is refused
+  # field by field here, as the original's early returns did. Guard clauses
+  # are not the branching this rule is after.
+  ReturnCount:
+    excludeGuardClauses: true
   # An HTTP status is its own name: 403 reads as "forbidden" to anyone who
   # would touch this code, and HTTP_FORBIDDEN = 403 adds a hop, not meaning.
   MagicNumber:

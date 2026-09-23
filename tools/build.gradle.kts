@@ -9,3 +9,12 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":adapters"))
 }
+
+tasks.register<JavaExec>("probe") {
+    group = "tickguard"
+    description = "Checks the Toss API end to end: token, socket, subscription, ticks, pong."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.ProbeKt")
+    // .env sits at the repository root, as it did for the original.
+    workingDir = rootDir
+}

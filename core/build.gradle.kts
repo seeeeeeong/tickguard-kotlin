@@ -5,4 +5,14 @@
 // a convention only a reviewer enforces does not survive a busy week.
 plugins {
     id("tickguard.kotlin-jvm")
+    `java-test-fixtures`
+}
+
+dependencies {
+    // Pure libraries with no I/O of their own: concurrency, and reading the
+    // JSON the server sends and writing the declarations it expects.
+    api(libs.coroutines.core)
+    api(libs.serialization.json)
+
+    testFixturesApi(libs.coroutines.core)
 }

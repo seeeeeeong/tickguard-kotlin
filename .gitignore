@@ -17,3 +17,6 @@ local.properties
 
 # Design notes are kept locally, out of the repository.
 docs/
+
+# JVM heap dumps, written to the working directory on OutOfMemoryError.
+*.hprof

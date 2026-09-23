@@ -21,7 +21,14 @@ dependencies {
     "testImplementation"(platform(libs.findLibrary("junit-bom").get()))
     "testImplementation"(libs.findLibrary("junit-jupiter").get())
     "testImplementation"(libs.findLibrary("assertj-core").get())
+    "testImplementation"(libs.findLibrary("coroutines-test").get())
     "testRuntimeOnly"(libs.findLibrary("junit-platform-launcher").get())
+}
+
+// Tests drive virtual time with runCurrent and advanceTimeBy, which the
+// coroutines test library still marks experimental. Production code may not.
+tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileTestKotlin") {
+    compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
 }
 
 tasks.withType<Test>().configureEach {

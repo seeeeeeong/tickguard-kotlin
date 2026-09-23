@@ -6,11 +6,8 @@ import com.tngtech.archunit.core.importer.ImportOption
 import org.junit.jupiter.api.Test
 
 /**
- * The rules applied to the real modules.
- *
- * Empty checks are allowed while core has no classes yet; an empty module
- * satisfies every rule trivially, and the fixtures in RulesTest show each rule
- * would fail on a violation.
+ * The rules applied to the real modules. The fixtures in RulesTest show each
+ * rule would fail on a violation.
  */
 class ArchitectureTest {
     private fun classesOf(vararg modules: String): JavaClasses =
@@ -21,18 +18,19 @@ class ArchitectureTest {
 
     @Test
     fun `core depends on no framework`() {
-        Rules.frameworkFree().allowEmptyShould(true).check(classesOf("core"))
+        Rules.frameworkFree().check(classesOf("core"))
     }
 
     @Test
     fun `features do not depend on each other in a cycle`() {
-        Rules.featuresAcyclic("tickguard").allowEmptyShould(true).check(classesOf(*MODULES))
+        Rules.featuresAcyclic("tickguard").check(classesOf(*MODULES))
     }
 
     @Test
     fun `nothing but token issuance writes to Toss`() {
         Rules
             .readOnly("tickguard.toss", "tickguard.toss.auth")
+            // Only token issuance exists under toss so far, and it is exempt.
             .allowEmptyShould(true)
             .check(classesOf(*MODULES))
     }

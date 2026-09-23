@@ -23,6 +23,10 @@ coroutines:
     active: true
 
 style:
+  # An HTTP status is its own name: 403 reads as "forbidden" to anyone who
+  # would touch this code, and HTTP_FORBIDDEN = 403 adds a hop, not meaning.
+  MagicNumber:
+    ignoreNumbers: ['-1', '0', '1', '2', '401', '403', '404', '408', '429', '500', '503']
   # "No TODO/FIXME without an issue link", from the original's CLAUDE.md.
   ForbiddenComment:
     comments:

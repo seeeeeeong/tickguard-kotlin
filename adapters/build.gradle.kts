@@ -5,5 +5,12 @@ plugins {
 }
 
 dependencies {
-    implementation(project(":core"))
+    api(project(":core"))
+    // One HTTP stack for the socket and REST alike: one set of timeouts, one
+    // way a failure is classified, one test server for both.
+    api(libs.okhttp)
+    implementation(libs.okhttp.coroutines)
+
+    testImplementation(libs.mockwebserver)
+    testImplementation(testFixtures(project(":core")))
 }

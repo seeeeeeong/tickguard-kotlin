@@ -5,6 +5,9 @@ assertj = "3.27.7"
 detekt = "2.0.0-alpha.6"
 spotless = "8.10.2"
 ktlint = "1.8.0"
+archunit = "1.5.0"
+konsist = "0.17.3"
+okhttp = "5.5.0"
 
 [libraries]
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -14,3 +17,6 @@ junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+archunit = { module = "com.tngtech.archunit:archunit", version.ref = "archunit" }
+konsist = { module = "com.lemonappdev:konsist", version.ref = "konsist" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }

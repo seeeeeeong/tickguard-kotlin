@@ -1,0 +1,23 @@
+server:
+  # Loopback by default: nothing here needs to be reachable from outside.
+  address: ${TICKGUARD_METRICS_HOST:127.0.0.1}
+  port: ${TICKGUARD_METRICS_PORT:9464}
+
+management:
+  endpoints:
+    web:
+      # The original served metrics at /metrics. Scrape configs point there.
+      base-path: /
+      path-mapping:
+        prometheus: metrics
+      exposure:
+        include: prometheus, health
+  endpoint:
+    health:
+      show-details: never
+
+spring:
+  application:
+    name: tickguard
+  main:
+    banner-mode: off

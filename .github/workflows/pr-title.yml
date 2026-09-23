@@ -33,6 +33,7 @@ jobs:
       # for a message that was never committed; the runner has no git identity.
       - run: |
           git config user.name github-actions
+          git config user.email github-actions[bot]@users.noreply.github.com
           cog verify "$TITLE"
         env:
           TITLE: ${{ github.event.pull_request.title }}

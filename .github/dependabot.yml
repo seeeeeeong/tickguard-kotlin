@@ -1,0 +1,24 @@
+version: 2
+
+updates:
+  # Reads gradle/libs.versions.toml, which build-logic shares.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    # "chore(deps): bump …", which the PR title check accepts.
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Tests and linters move together; one PR a week rather than five.
+      build-tooling:
+        patterns: ['org.junit*', 'org.assertj*', 'dev.detekt*', 'com.diffplug.spotless*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope

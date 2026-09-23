@@ -1,0 +1,28 @@
+name: PR title
+
+# Pull requests are squash-merged and the title becomes the commit on main, so
+# the title is what has to be Conventional. Its own workflow, so renaming a pull
+# request re-checks the title without rebuilding everything.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cocogitto/cocogitto-action@v4
+        with:
+          install-only: true
+
+      # Checked against cog.toml, the same scope list the commit-msg hook uses.
+      # Passed through the environment: a title interpolated into the script
+      # would be executed as shell.
+      - run: cog verify "$TITLE"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}

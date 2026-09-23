@@ -14,3 +14,6 @@ local.properties
 *.db
 *.db-wal
 *.db-shm
+
+# Design notes are kept locally, out of the repository.
+docs/

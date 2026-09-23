@@ -4,7 +4,8 @@ Subscribes to Toss Securities Open API realtime quotes, evaluates compound rules
 and sends alerts. **Read-only — this project never places orders.**
 
 A port of the TypeScript original to Kotlin and Spring Boot. The original is the
-reference for behaviour; see [ADR 0001](docs/adr/0001-port-for-parity.md).
+reference for behaviour: parity comes first, proven by replaying recorded ticks through
+both rule engines, and behaviour changes come after it, each in its own pull request.
 
 ## Never do this
 
@@ -89,4 +90,3 @@ that. Here the socket reader, schedulers and I/O run on different threads.
 - Integration guide: https://openapi.tossinvest.com/openapi-docs/overview.md
 - AsyncAPI (WebSocket source of truth): https://openapi.tossinvest.com/openapi-docs/latest/asyncapi.json
 - OpenAPI (REST source of truth): https://openapi.tossinvest.com/openapi-docs/latest/openapi.json
-- Decisions: [docs/adr](docs/adr/)

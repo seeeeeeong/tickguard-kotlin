@@ -20,6 +20,14 @@ class PricesTest {
     }
 
     @Test
+    fun `reads the live response shape, keeping every digit`() {
+        val body =
+            """{"result":[{"symbol":"TSLA","timestamp":"2026-09-23T00:27:33.000+09:00","lastPrice":"376.815","currency":"USD"}]}"""
+
+        assertThat("${parsePrices(StrictJson.parse(body)).getValue("TSLA")}").isEqualTo("376.815")
+    }
+
+    @Test
     fun `skips a row it cannot read and keeps the rest`() {
         val body =
             """{"result":[{"symbol":"A","lastPrice":"--"},{"symbol":"B","lastPrice":1},null,{"symbol":"C","lastPrice":"10"}]}"""

@@ -1,0 +1,52 @@
+# Only departures from detekt's defaults. Each one says which rule of the
+# TypeScript original it carries over, or what the JVM adds.
+
+complexity:
+  # Biome's noExcessiveCognitiveComplexity was set to 12 in the original.
+  CognitiveComplexMethod:
+    active: true
+    allowedComplexity: 12
+
+coroutines:
+  # The original linted floating promises. A coroutine launched on GlobalScope
+  # is the same mistake: nothing awaits it and nothing stops it on shutdown.
+  GlobalCoroutineUsage:
+    active: true
+  # Failures are isolated with broad catches throughout this codebase. On the
+  # JVM each of those also catches cancellation, and a swallowed cancellation
+  # is a shutdown that never finishes.
+  SuspendFunSwallowedCancellation:
+    active: true
+  # A suspend call in `finally` does not run once the coroutine is cancelled,
+  # which is exactly when cleanup is needed.
+  SuspendFunInFinallySection:
+    active: true
+
+style:
+  # "No TODO/FIXME without an issue link", from the original's CLAUDE.md.
+  ForbiddenComment:
+    comments:
+      - value: 'TODO'
+        reason: 'Link an issue (https://github.com/seeeeeeong/tickguard-kotlin/issues/N) or do it now.'
+      - value: 'FIXME'
+        reason: 'Link an issue (https://github.com/seeeeeeong/tickguard-kotlin/issues/N) or fix it now.'
+      - value: 'STOPSHIP'
+        reason: 'Address this before merging.'
+    allowedPatterns: 'github\.com/seeeeeeong/tickguard-kotlin/issues/\d+'
+  ForbiddenMethodCall:
+    active: true
+    # Operator entry points print by design; everything else logs.
+    excludes: ['**/tools/**']
+    methods:
+      - value: 'kotlin.io.print'
+        reason: 'Use a logger. Only tools/ may print.'
+      - value: 'kotlin.io.println'
+        reason: 'Use a logger. Only tools/ may print.'
+      - value: 'java.math.BigDecimal.<init>(kotlin.Double)'
+        reason: 'A Double has already lost the digits. Prices arrive as strings for this reason.'
+      - value: 'java.math.BigDecimal.<init>(kotlin.String)'
+        reason: 'Throws NumberFormatException. Parse at the boundary with toBigDecimalOrNull().'
+      - value: 'java.math.BigDecimal.equals'
+        reason: 'Compares scale: 339.20 == 339.2 is false. Use compareTo, <, >= or signum().'
+      - value: 'kotlin.text.toDouble'
+        reason: 'Prices and volumes are decimals. Parse them as BigDecimal.'

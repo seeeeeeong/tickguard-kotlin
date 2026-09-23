@@ -1,8 +1,7 @@
-/**
- * What every module compiles and tests with, so no module can quietly opt out.
- */
+// What every module compiles and tests with, so no module can quietly opt out.
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    id("tickguard.quality")
 }
 
 val libs = the<VersionCatalogsExtension>().named("libs")

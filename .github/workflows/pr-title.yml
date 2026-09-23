@@ -1,0 +1,39 @@
+name: PR title
+
+# Pull requests are squash-merged and the title becomes the commit on main, so
+# the title is what has to be Conventional. Its own workflow, so renaming a pull
+# request re-checks the title without rebuilding everything.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The release binary, pinned to the version the commit-msg hook uses.
+      # cocogitto-action@v4 installs 6.4.0 and fails in install-only mode.
+      - name: Install cocogitto
+        env:
+          COG_VERSION: 7.0.0
+        run: |
+          curl -sSfL "https://github.com/cocogitto/cocogitto/releases/download/${COG_VERSION}/cocogitto-${COG_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+
+      # Checked against cog.toml, the same scope list the commit-msg hook uses.
+      # Passed through the environment: a title interpolated into the script
+      # would be executed as shell.
+      # cog prints an author beside the verdict and panics without one, even
+      # for a message that was never committed; the runner has no git identity.
+      - run: |
+          git config user.name github-actions
+          git config user.email github-actions[bot]@users.noreply.github.com
+          cog verify "$TITLE"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}

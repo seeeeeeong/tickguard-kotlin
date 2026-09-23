@@ -1,0 +1,30 @@
+# Conventional Commits, verified by the commit-msg hook and, for the squashed
+# title that lands on main, by CI.
+#
+# Scopes are features, as packages are. A scope outside this list is a sign
+# the change is either misnamed or a feature nobody has agreed to yet.
+scopes = [
+  "auth",
+  "gateway",
+  "subscribe",
+  "stream",
+  "pipeline",
+  "rules",
+  "notify",
+  "rest",
+  "holdings",
+  "sla",
+  "reconcile",
+  "observability",
+  "store",
+  "news",
+  "network",
+  "time",
+  "verdict",
+  "backtest",
+  "fallback",
+  "runner",
+  "ci",
+  "deps",
+  "repo",
+]

@@ -19,4 +19,6 @@ dependencies {
 
     testImplementation(platform(libs.spring.boot.dependencies))
     testImplementation(libs.spring.boot.starter.webmvc.test)
+    testImplementation(libs.mockwebserver)
+    testImplementation(testFixtures(project(":core")))
 }

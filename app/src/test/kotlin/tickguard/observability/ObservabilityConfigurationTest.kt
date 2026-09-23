@@ -11,7 +11,8 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Without the app itself: loading the context must not connect to Toss.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = ["tickguard.enabled=false"])
 class ObservabilityConfigurationTest
     @Autowired
     constructor(
@@ -28,7 +29,7 @@ class ObservabilityConfigurationTest
 
         @Test
         fun `serves Prometheus metrics at the path the original served them`() {
-            Metrics(registry).counter("tickguard.probe", "A counter for this test.") { 5 }
+            Metrics(registry, owner = this).counter("tickguard.probe", "A counter for this test.") { 5 }
 
             val response = get("/metrics")
 

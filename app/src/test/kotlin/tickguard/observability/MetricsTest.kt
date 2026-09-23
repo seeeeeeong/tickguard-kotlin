@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 
 class MetricsTest {
     private val registry = SimpleMeterRegistry()
-    private val metrics = Metrics(registry)
+    private val metrics = Metrics(registry, owner = this)
 
     @Test
     fun `reads the source on every scrape, so a value cannot go stale`() {
@@ -16,6 +16,15 @@ class MetricsTest {
         assertThat(registry.get("tickguard.queue").gauge().value()).isEqualTo(1.0)
         depth = 7
         assertThat(registry.get("tickguard.queue").gauge().value()).isEqualTo(7.0)
+    }
+
+    @Test
+    fun `keeps reading after a garbage collection, when nothing else holds the reader`() {
+        metrics.gauge("tickguard.held", "Held only by the meter.") { 3 }
+
+        repeat(3) { System.gc() }
+
+        assertThat(registry.get("tickguard.held").gauge().value()).isEqualTo(3.0)
     }
 
     @Test

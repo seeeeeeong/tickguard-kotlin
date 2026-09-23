@@ -10,6 +10,8 @@ dependencies {
     // way a failure is classified, one test server for both.
     api(libs.okhttp)
     implementation(libs.okhttp.coroutines)
+    // In-process and one file to back up, as node:sqlite was for the original.
+    implementation(libs.sqlite.jdbc)
 
     testImplementation(libs.mockwebserver)
     testImplementation(testFixtures(project(":core")))

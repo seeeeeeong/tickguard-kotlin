@@ -16,4 +16,8 @@ dependencies {
 
     testFixturesApi(libs.coroutines.core)
     testFixturesApi(libs.coroutines.test)
+    // The store contract is a test suite each adapter runs against itself.
+    testFixturesApi(platform(libs.junit.bom))
+    testFixturesApi(libs.junit.jupiter)
+    testFixturesApi(libs.assertj.core)
 }

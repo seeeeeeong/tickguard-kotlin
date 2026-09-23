@@ -12,6 +12,8 @@ local.properties
 
 # sqlite
 *.db
+# A database the original service wrote, with made-up data: the cut-over test reads it.
+!adapters/src/test/resources/ts-made.db
 *.db-wal
 *.db-shm
 

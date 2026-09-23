@@ -1,0 +1,16 @@
+.gradle/
+build/
+.kotlin/
+.idea/
+*.iml
+local.properties
+.DS_Store
+*.log
+
+# Credentials for a live brokerage account. Never committed.
+.env
+
+# sqlite
+*.db
+*.db-wal
+*.db-shm

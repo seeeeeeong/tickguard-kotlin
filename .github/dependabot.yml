@@ -10,6 +10,10 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # detekt analyses with the Kotlin it was built against, 2.4.10 for
+      # 2.0.0-alpha.6. Kotlin moves when detekt does, in one change.
+      - dependency-name: 'org.jetbrains.kotlin*'
     groups:
       # Tests and linters move together; one PR a week rather than five.
       build-tooling:

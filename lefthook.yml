@@ -1,0 +1,68 @@
+# main is protected on GitHub by a ruleset: pull requests only, CI green. These
+# guards are not the enforcement — `--no-verify` bypasses them — they are the
+# faster answer, before the commit exists rather than after a push is refused.
+#
+# Setup: brew install lefthook cocogitto ktlint && lefthook install
+# Keep ktlint at the version in gradle/libs.versions.toml; ./gradlew check is
+# the authority, this is only the quick pass.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: guard main
+      only:
+        - ref: main
+      run: |
+        echo ''
+        echo '✖ main is protected. Start a branch instead:'
+        echo ''
+        echo '    git switch -c feat/<what-becomes-true>'
+        echo ''
+        exit 1
+    - name: ktlint
+      glob: '*.{kt,kts}'
+      run: |
+        ktlint --format {staged_files} || {
+          echo ''
+          echo '✖ ktlint found issues it could not fix automatically.'
+          echo '  Run:  ./gradlew spotlessApply      then review, stage, and commit again.'
+          echo ''
+          exit 1
+        }
+      stage_fixed: true
+
+commit-msg:
+  jobs:
+    - name: cocogitto
+      run: |
+        cog verify --file {1} || {
+          echo ''
+          echo '✖ Commit message must follow Conventional Commits, with a scope from cog.toml.'
+          echo '    feat(gateway): reconnect with jittered backoff'
+          echo '    fix(subscribe): exclude rejected topics on re-declaration'
+          echo '  Explain WHY in the body, not what.'
+          echo ''
+          exit 1
+        }
+
+pre-push:
+  jobs:
+    - name: guard main
+      only:
+        - ref: main
+      run: |
+        echo ''
+        echo '✖ Do not push main directly. Open a pull request so CI runs first.'
+        echo ''
+        echo '    git switch -c feat/<what-becomes-true>'
+        echo '    gh pr create'
+        echo ''
+        exit 1
+    - name: check
+      run: |
+        ./gradlew check --console=plain -q || {
+          echo ''
+          echo '✖ ./gradlew check failed. Formatting alone:  ./gradlew spotlessApply'
+          echo ''
+          exit 1
+        }

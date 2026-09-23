@@ -82,7 +82,11 @@ that. Here the socket reader, schedulers and I/O run on different threads.
 ## Commands
 
 ```bash
-./gradlew build        # compile and test every module
+./gradlew check          # compile, test, ktlint, detekt — what CI runs
+./gradlew spotlessApply  # fix formatting
+
+# once per clone: hooks guard main, format staged files, verify commit messages
+brew install lefthook cocogitto ktlint && lefthook install
 ```
 
 ## References

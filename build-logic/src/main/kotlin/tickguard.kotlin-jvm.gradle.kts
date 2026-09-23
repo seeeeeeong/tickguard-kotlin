@@ -27,9 +27,10 @@ dependencies {
 
 // Tests drive virtual time with runCurrent and advanceTimeBy, which the
 // coroutines test library still marks experimental. Production code may not.
-tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileTestKotlin") {
-    compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
-}
+tasks
+    .withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>()
+    .matching { it.name == "compileTestKotlin" || it.name == "compileTestFixturesKotlin" }
+    .configureEach { compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi") }
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()

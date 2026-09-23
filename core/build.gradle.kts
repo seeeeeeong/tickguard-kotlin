@@ -15,4 +15,5 @@ dependencies {
     api(libs.serialization.json)
 
     testFixturesApi(libs.coroutines.core)
+    testFixturesApi(libs.coroutines.test)
 }

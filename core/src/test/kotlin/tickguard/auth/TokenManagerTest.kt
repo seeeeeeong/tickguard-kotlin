@@ -1,19 +1,16 @@
 package tickguard.auth
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import tickguard.testing.failureOf
+import tickguard.testing.supervisedScope
 import java.time.Instant
 import java.time.InstantSource
 import kotlin.time.Duration
@@ -46,14 +43,11 @@ class TokenManagerTest {
         }
     }
 
-    private fun TestScope.supervised() =
-        CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext.job))
-
     @Test
     fun `issues once when many callers arrive together`() =
         runTest {
             val issuer = FakeIssuer()
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             val tokens = List(10) { async { manager.token() } }.awaitAll()
 
@@ -65,7 +59,7 @@ class TokenManagerTest {
     fun `reuses a cached token that is still comfortably valid`() =
         runTest {
             val issuer = FakeIssuer(lifetime = 10.minutes)
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             manager.token()
             now += 5.minutes.inWholeMilliseconds
@@ -78,7 +72,7 @@ class TokenManagerTest {
     fun `refreshes before expiry rather than waiting for a 401`() =
         runTest {
             val issuer = FakeIssuer(lifetime = 10.minutes)
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             manager.token()
             // 30s short of expiry: still valid, but inside the refresh skew.
@@ -92,7 +86,7 @@ class TokenManagerTest {
     fun `does not cache a failure, so the next caller retries`() =
         runTest {
             val issuer = FakeIssuer(fail = { IllegalStateException("boom") })
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             assertThat(failureOf { manager.token() }).hasMessage("boom")
 
@@ -105,7 +99,7 @@ class TokenManagerTest {
     fun `propagates the failure to every caller that shared the attempt`() =
         runTest {
             val issuer = FakeIssuer(fail = { IllegalStateException("boom") })
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             val failures = List(2) { async { failureOf { manager.token() } } }.awaitAll()
 
@@ -117,7 +111,7 @@ class TokenManagerTest {
     fun `a cancelled caller does not take the shared issue down with it`() =
         runTest {
             val issuer = FakeIssuer(hold = 1.seconds)
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             val first = launch { manager.token() }
             val second = async { manager.token() }
@@ -132,7 +126,7 @@ class TokenManagerTest {
     fun `invalidating the current token issues a fresh one on the next call`() =
         runTest {
             val issuer = FakeIssuer()
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             val revoked = manager.token()
             manager.invalidate(revoked)
@@ -144,7 +138,7 @@ class TokenManagerTest {
     fun `a late 401 for a replaced token does not discard its replacement`() =
         runTest {
             val issuer = FakeIssuer()
-            val manager = TokenManager(issuer, clock, supervised())
+            val manager = TokenManager(issuer, clock, supervisedScope())
 
             val old = manager.token()
             manager.invalidate(old)

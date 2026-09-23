@@ -28,11 +28,7 @@ class ArchitectureTest {
 
     @Test
     fun `nothing but token issuance writes to Toss`() {
-        Rules
-            .readOnly("tickguard.toss", "tickguard.toss.auth")
-            // Only token issuance exists under toss so far, and it is exempt.
-            .allowEmptyShould(true)
-            .check(classesOf(*MODULES))
+        Rules.readOnly("tickguard.toss", "tickguard.toss.auth").check(classesOf(*MODULES))
     }
 
     private companion object {

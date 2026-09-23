@@ -6,8 +6,16 @@ complexity:
   CognitiveComplexMethod:
     active: true
     allowedComplexity: 12
+  # Options classes with defaults are the named-argument form of the
+  # original's options objects: every clock, timer and callback injectable, and
+  # most defaulted. Required parameters are still counted against the limit.
+  LongParameterList:
+    ignoreDefaultParameters: true
 
 coroutines:
+  # Tests pick real threads on purpose, to exercise a socket in real time.
+  InjectDispatcher:
+    excludes: ['**/test/**', '**/testFixtures/**']
   # The original linted floating promises. A coroutine launched on GlobalScope
   # is the same mistake: nothing awaits it and nothing stops it on shutdown.
   GlobalCoroutineUsage:
@@ -21,6 +29,13 @@ coroutines:
   # which is exactly when cleanup is needed.
   SuspendFunInFinallySection:
     active: true
+
+naming:
+  # Kotlin's conventions name a file of several top-level declarations after
+  # what it holds (Backoff.kt: the options, the default, the function). This
+  # rule counts only classes and would rename it after the options.
+  MatchingDeclarationName:
+    active: false
 
 style:
   # An HTTP status is its own name: 403 reads as "forbidden" to anyone who

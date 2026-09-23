@@ -1,4 +1,6 @@
 server:
+  # Finish in-flight requests on shutdown rather than cutting them.
+  shutdown: graceful
   # Loopback by default: nothing here needs to be reachable from outside.
   address: ${TICKGUARD_METRICS_HOST:127.0.0.1}
   port: ${TICKGUARD_METRICS_PORT:9464}
@@ -19,5 +21,12 @@ management:
 spring:
   application:
     name: tickguard
+  config:
+    # The original ran with `node --env-file=.env`. Variables set in the
+    # environment still win over the file.
+    import: optional:file:.env[.properties]
+  lifecycle:
+    # How long a drain may take before shutdown goes ahead without it.
+    timeout-per-shutdown-phase: 30s
   main:
     banner-mode: off

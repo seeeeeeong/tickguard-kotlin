@@ -324,28 +324,28 @@ class SqliteStore private constructor(
         /**
          * Opens, or creates, the database at [path]. Opening may create a file
          * and fail doing so, which belongs before the app exists rather than
-         * inside a constructor.
+         * inside a constructor. It blocks: it runs once, at boot, before there
+         * is an engine to keep free.
          */
-        suspend fun open(
+        fun open(
             path: String = "tickguard.db",
             io: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
-        ): SqliteStore =
-            withContext(io) {
-                val db = DriverManager.getConnection("jdbc:sqlite:$path")
-                // The original ran the schema whole; JDBC runs one statement at a
-                // time. Comments go first, because one contains a semicolon. SQLite
-                // does not keep a comment that precedes a CREATE, so the tables it
-                // records are the same either way.
-                SCHEMA
-                    .lines()
-                    .filterNot { it.trim().startsWith("--") }
-                    .joinToString("\n")
-                    .split(";")
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .forEach { sql -> db.createStatement().use { it.execute(sql) } }
-                SqliteStore(db, io)
-            }
+        ): SqliteStore {
+            val db = DriverManager.getConnection("jdbc:sqlite:$path")
+            // The original ran the schema whole; JDBC runs one statement at a
+            // time. Comments go first, because one contains a semicolon. SQLite
+            // does not keep a comment that precedes a CREATE, so the tables it
+            // records are the same either way.
+            SCHEMA
+                .lines()
+                .filterNot { it.trim().startsWith("--") }
+                .joinToString("\n")
+                .split(";")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .forEach { sql -> db.createStatement().use { it.execute(sql) } }
+            return SqliteStore(db, io)
+        }
     }
 }
 

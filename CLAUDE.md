@@ -89,6 +89,7 @@ that. Here the socket reader, schedulers and I/O run on different threads.
 ```bash
 ./gradlew check          # compile, test, ktlint, detekt — what CI runs
 ./gradlew spotlessApply  # fix formatting
+./gradlew :app:bootRun   # the service; reads .env like the original. Never beside it.
 
 # once per clone: hooks guard main, format staged files, verify commit messages
 brew install lefthook cocogitto ktlint && lefthook install

@@ -12,9 +12,16 @@ import io.micrometer.core.instrument.MeterRegistry
  *
  * Names follow the original's: a counter `tickguard.ticks` is scraped as
  * `tickguard_ticks_total`, a gauge keeps its name.
+ *
+ * Micrometer holds a meter's state object only weakly, and reads NaN once it is
+ * collected. A reader lambda alone would be collected at the first GC — a metric
+ * that goes quiet exactly when nobody is looking. So every meter's state is
+ * [owner], which lives as long as the app does, and the reader is captured by
+ * the function that measures it.
  */
 class Metrics(
     private val registry: MeterRegistry,
+    private val owner: Any,
 ) {
     fun counter(
         name: String,
@@ -22,7 +29,7 @@ class Metrics(
         read: () -> Number,
     ) {
         FunctionCounter
-            .builder(name, read) { it().toDouble() }
+            .builder(name, owner) { read().toDouble() }
             .description(help)
             .register(registry)
     }
@@ -33,7 +40,7 @@ class Metrics(
         read: () -> Number,
     ) {
         Gauge
-            .builder(name, read) { it().toDouble() }
+            .builder(name, owner) { read().toDouble() }
             .description(help)
             .register(registry)
     }
@@ -51,16 +58,16 @@ class Metrics(
         read: () -> Map<String, Number>,
     ) {
         for (field in read().keys) {
-            val value = { read()[field] ?: 0 }
+            val value = { (read()[field] ?: 0).toDouble() }
             if (counter) {
                 FunctionCounter
-                    .builder(name, value) { it().toDouble() }
+                    .builder(name, owner) { value() }
                     .description(help)
                     .tag(labelName, field)
                     .register(registry)
             } else {
                 Gauge
-                    .builder(name, value) { it().toDouble() }
+                    .builder(name, owner) { value() }
                     .description(help)
                     .tag(labelName, field)
                     .register(registry)

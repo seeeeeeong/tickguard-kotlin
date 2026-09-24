@@ -228,7 +228,8 @@ class Tickguard(
     // channel is one more thing to remember to watch. Inhibited while blocked,
     // as Alertmanager inhibits a symptom behind its cause: every feed goes
     // silent when the IP is refused, and that was reported once already.
-    internal val incidents = IncidentReporter(::report, inhibited = { link.blockedSince != null }, clock)
+    internal val incidents =
+        IncidentReporter(::report, inhibited = { link.blockedSince != null }, clock, withdraw = grouper::withdraw)
 
     internal val sla =
         SlaWatcher(

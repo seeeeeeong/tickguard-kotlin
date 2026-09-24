@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * A notification is already formatted. Channels deliver text; deciding what
@@ -28,6 +29,18 @@ interface Channel {
     suspend fun send(notification: Notification)
 }
 
+/**
+ * A channel's refusal that says whether trying again can help. Anything else
+ * a channel throws — a timeout, a reset connection — is taken as transient.
+ */
+interface DeliveryFailure {
+    /** False when the same request will be refused again: a revoked webhook, a malformed message. */
+    val retryable: Boolean
+
+    /** How long the channel asked to be left alone, when it said. */
+    val retryAfter: Duration?
+}
+
 data class NotifierStats(
     val queued: Int,
     val delivered: Int,
@@ -43,6 +56,11 @@ data class NotifierStats(
  * propagate backwards: Slack being down is not a reason to stop reading
  * quotes. Every send is therefore attempted, retried, and then given up on
  * with a count rather than an exception.
+ *
+ * Only what can succeed later is retried. A refusal the channel marks as
+ * permanent is given up on at once, and a channel that asks for time with
+ * Retry-After gets it: retrying a rate limit sooner only extends it. The
+ * policy Alertmanager's retry stage applies to its receivers.
  *
  * Delivery is launched rather than awaited. The rules run on the engine, and
  * awaiting an HTTP round trip there would hold everything behind it.
@@ -94,13 +112,15 @@ class Notifier(
                 onDelivered(notification, channel.name)
                 return
             }
-            if (attempt == maxAttempts) {
+            val refusal = failure as? DeliveryFailure
+            if (attempt == maxAttempts || refusal?.retryable == false) {
                 abandoned.incrementAndGet()
                 onGaveUp(notification, channel.name, failure)
                 return
             }
             retried.incrementAndGet()
-            delay(baseDelay * (1 shl (attempt - 1)))
+            val backoff = baseDelay * (1 shl (attempt - 1))
+            delay(maxOf(backoff, minOf(refusal?.retryAfter ?: Duration.ZERO, MAX_RETRY_AFTER)))
         }
     }
 
@@ -127,6 +147,12 @@ class Notifier(
     private companion object {
         /** Three tries rides out a blip without hammering a channel that is down. */
         const val DEFAULT_MAX_ATTEMPTS = 3
+
+        /**
+         * The longest Retry-After honoured. A channel asking for more is down
+         * for longer than an alert stays worth delivering late.
+         */
+        val MAX_RETRY_AFTER = 1.minutes
 
         /** Doubled per retry: 500ms, then 1s. */
         val DEFAULT_BASE_DELAY = 500.milliseconds

@@ -36,6 +36,13 @@ internal fun statusPanels(
         ),
         StatusPanel("connections", "$opens", ok = opens == 1L),
         StatusPanel("ticks", "%,d".format(Locale.US, ticks), ok = ticks > 0),
+        with(s.ticks) {
+            StatusPanel(
+                "recorded",
+                "${"%,d".format(Locale.US, written)} · $failed failed · $dropped dropped",
+                ok = failed + dropped == 0,
+            )
+        },
         StatusPanel("decode dropped", "$decodeDropped", ok = decodeDropped == 0L),
         StatusPanel(
             "queue",
@@ -43,6 +50,7 @@ internal fun statusPanels(
         ),
         // The order channel is closed after 2s of stalled consumption; a quarter of that is the budget.
         StatusPanel("queue wait max", "${waitMs}ms / 2000ms", ok = waitMs < QUEUE_WAIT_BUDGET_MS),
+        fallbackPanel(app, s, now),
         StatusPanel(
             "ws↔rest drift",
             "${(app.worstDrift * PERCENT).toFixed(DRIFT_PLACES)}%",
@@ -56,6 +64,19 @@ internal fun statusPanels(
         verdictPanel(s),
         StatusPanel("notify failed", "${app.notifier.stats().abandoned}", ok = app.notifier.stats().abandoned == 0),
         StatusPanel("sla watching", "${s.sla.watched} (${s.sla.open} open)"),
+    )
+}
+
+private fun fallbackPanel(
+    app: Tickguard,
+    s: Snapshot,
+    now: Instant,
+): StatusPanel {
+    val silent = Math.round((now.toEpochMilli() - app.lastQuoteAt.toEpochMilli()) / MILLIS_PER_SECOND)
+    return StatusPanel(
+        "fallback",
+        if (s.fallback.active) "REST polling · stream silent ${silent}s · ${s.fallback.polls} polls" else "idle",
+        ok = !s.fallback.active && s.fallback.failures == 0,
     )
 }
 
@@ -152,8 +173,25 @@ internal fun registerMetrics(
         with(app.notifier.stats()) { mapOf("delivered" to delivered, "retried" to retried, "abandoned" to abandoned) }
     }
     registerNewsMetrics(app, metrics)
+    registerRecordingMetrics(app, metrics)
     metrics.fromStats("tickguard.ratelimit", "REST limiter.", counter = true) {
         with(app.snapshot.limiter) { mapOf("waits" to waits, "totalWaitMs" to totalWait.inWholeMilliseconds) }
+    }
+}
+
+private fun registerRecordingMetrics(
+    app: Tickguard,
+    metrics: Metrics,
+) {
+    metrics.counter("tickguard.ticks.recorded", "Trades stored.") { app.snapshot.ticks.written }
+    metrics.gauge("tickguard.ticks.queued", "Trades waiting to be stored.") { app.snapshot.ticks.queued }
+    metrics.counter("tickguard.ticks.dropped", "Trades dropped from a full queue.") { app.snapshot.ticks.dropped }
+    metrics.counter("tickguard.ticks.record.failed", "Trades not stored.") { app.snapshot.ticks.failed }
+    metrics.gauge("tickguard.fallback.active", "REST standing in for the stream.") {
+        if (app.snapshot.fallback.active) 1 else 0
+    }
+    metrics.fromStats("tickguard.fallback", "REST fallback polls.", counter = true) {
+        with(app.snapshot.fallback) { mapOf("polls" to polls, "quotes" to quotes, "failures" to failures) }
     }
 }
 

@@ -7,6 +7,7 @@ import java.time.InstantSource
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 class WatcherTest {
     private var now = 0L
@@ -98,16 +99,41 @@ class WatcherTest {
         assertThat(incidents.single().silentFor).isEqualTo(12.minutes)
     }
 
+    /** Three ticks a few seconds apart: the feed is back. */
+    private fun SlaWatcher.ticksReturn() =
+        repeat(3) {
+            observed("005930", Market.KR)
+            advance(5.seconds)
+        }
+
     @Test
-    fun `reports recovery when ticks return`() {
+    fun `reports recovery when ticks return, measured to the first of them`() {
+        val watcher = watcher()
+        watcher.observed("005930", Market.KR)
+        advance(20.minutes)
+        watcher.check()
+
+        watcher.ticksReturn()
+
+        assertThat(recoveries).containsExactly("005930" to 20.minutes)
+    }
+
+    @Test
+    fun `does not call a single stray print a recovery`() {
         val watcher = watcher()
         watcher.observed("005930", Market.KR)
         advance(20.minutes)
         watcher.check()
 
         watcher.observed("005930", Market.KR)
+        advance(15.minutes)
+        watcher.observed("005930", Market.KR)
+        watcher.observed("005930", Market.KR)
 
-        assertThat(recoveries).containsExactly("005930" to 20.minutes)
+        // Two prints fifteen minutes after a stray one: the streak started over and is not there yet.
+        assertThat(recoveries).isEmpty()
+        watcher.observed("005930", Market.KR)
+        assertThat(recoveries).containsExactly("005930" to 35.minutes)
     }
 
     @Test
@@ -116,7 +142,7 @@ class WatcherTest {
         watcher.observed("005930", Market.KR)
         advance(20.minutes)
         watcher.check()
-        watcher.observed("005930", Market.KR)
+        watcher.ticksReturn()
 
         advance(20.minutes)
         watcher.check()

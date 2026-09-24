@@ -37,17 +37,28 @@ class RateLimiterTest {
             limiter.acquire(RateLimitGroup.ACCOUNT)
             limiter.acquire(RateLimitGroup.ACCOUNT)
 
-            assertThat(slept).containsExactly(1.seconds)
+            // A second at 95%: the margin that keeps a misaligned window from counting two calls.
+            assertThat(slept).containsExactly(1053.milliseconds)
         }
 
     @Test
-    fun `refills continuously, so waiting half a second buys half a token`() =
+    fun `never lets calls at full demand reach the documented rate`() =
+        runTest {
+            val start = now
+            repeat(21) { limiter.acquire(RateLimitGroup.ACCOUNT) }
+
+            // Twenty refills at 1/s would take 20s; the margin stretches them past it.
+            assertThat(now - start).isGreaterThan(20_000)
+        }
+
+    @Test
+    fun `refills continuously, so waiting half a second buys most of half a token`() =
         runTest {
             limiter.acquire(RateLimitGroup.ACCOUNT)
             now += 500
             limiter.acquire(RateLimitGroup.ACCOUNT)
 
-            assertThat(slept).containsExactly(500.milliseconds)
+            assertThat(slept).containsExactly(553.milliseconds)
         }
 
     @Test
@@ -78,7 +89,7 @@ class RateLimiterTest {
             limiter.observe(RateLimitGroup.ACCOUNT, 999.0)
             limiter.acquire(RateLimitGroup.ACCOUNT)
 
-            assertThat(slept).containsExactly(1.seconds)
+            assertThat(slept).containsExactly(1053.milliseconds)
         }
 
     @Test
@@ -87,7 +98,7 @@ class RateLimiterTest {
             limiter.acquire(RateLimitGroup.ACCOUNT)
             limiter.acquire(RateLimitGroup.ACCOUNT)
 
-            assertThat(limiter.stats()).isEqualTo(RateLimiterStats(1, 1.seconds))
+            assertThat(limiter.stats()).isEqualTo(RateLimiterStats(1, 1053.milliseconds))
         }
 
     @Test

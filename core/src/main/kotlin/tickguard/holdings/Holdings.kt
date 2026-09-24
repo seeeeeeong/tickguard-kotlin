@@ -25,7 +25,14 @@ data class HoldingsStats(
     val refreshes: Int,
     val failures: Int,
     val skipped: Int,
+    /** Empty answers held back until a second one confirmed them. */
+    val unconfirmedEmpty: Int = 0,
 )
+
+/** A holdings body without its `result.items` list: not an empty portfolio, an unreadable answer. */
+class HoldingsFormatError(
+    message: String,
+) : IllegalStateException(message)
 
 /**
  * Keeps the set of held positions current, and lets subscriptions follow it.
@@ -40,6 +47,12 @@ data class HoldingsStats(
  * under `result.items`, quantities and prices are strings, and `marketCountry`
  * is what distinguishes a KR symbol from a US one.
  *
+ * An empty answer is believed only the second time in a row. A successful
+ * response with no positions is also what a backend mid-deploy or an account
+ * briefly unreadable returns, and taking it at its word unsubscribes every
+ * symbol and silences every position rule at once. A real sale of everything
+ * shows up again one poll later; a glitch does not.
+ *
  * Confined to the engine: refreshes, [current] and the change callback all run there.
  */
 class HoldingsStore(
@@ -52,6 +65,8 @@ class HoldingsStore(
     private var refreshes = 0
     private var failures = 0
     private var skipped = 0
+    private var unconfirmedEmpty = 0
+    private var emptyOnce = false
 
     @Suppress("TooGenericExceptionCaught") // Any failure keeps the last known positions.
     suspend fun refresh(): HoldingsSnapshot {
@@ -60,6 +75,13 @@ class HoldingsStore(
             val parsed = parseHoldings(body)
             refreshes += 1
             skipped += parsed.skipped
+
+            val suspect = parsed.positions.isEmpty() && snapshot.positions.isNotEmpty() && !emptyOnce
+            emptyOnce = parsed.positions.isEmpty()
+            if (suspect) {
+                unconfirmedEmpty += 1
+                return snapshot
+            }
 
             val previous = snapshot
             snapshot = HoldingsSnapshot(parsed.positions, parsed.markets, clock.instant())
@@ -78,7 +100,7 @@ class HoldingsStore(
 
     fun current(): HoldingsSnapshot = snapshot
 
-    fun stats() = HoldingsStats(refreshes, failures, skipped)
+    fun stats() = HoldingsStats(refreshes, failures, skipped, unconfirmedEmpty)
 
     private fun report(
         previous: HoldingsSnapshot,
@@ -101,7 +123,9 @@ fun parseHoldings(body: JsonElement?): ParsedHoldings {
     val markets = LinkedHashMap<String, String>()
     var skipped = 0
 
-    val items = (((body as? JsonObject)?.get("result") as? JsonObject)?.get("items") as? JsonArray).orEmpty()
+    val items =
+        ((body as? JsonObject)?.get("result") as? JsonObject)?.get("items") as? JsonArray
+            ?: throw HoldingsFormatError("holdings response has no result.items list")
     for (item in items) {
         val parsed = parseItem(item)
         if (parsed == null) {

@@ -37,7 +37,12 @@ class SlaWatcher(
     /** Silence beyond this, while open, is an incident. */
     private val threshold: Duration = DEFAULT_THRESHOLD,
     private val clock: InstantSource = InstantSource.system(),
-    private val onIncident: (Incident) -> Unit,
+    /**
+     * True when the incident was raised. False when it was held back, and then
+     * the same silence is offered again at the next check: an outage that
+     * outlasts whatever held it back must still be heard about.
+     */
+    private val onIncident: (Incident) -> Boolean,
     private val onRecovered: (code: String, silentFor: Duration) -> Unit = { _, _ -> },
 ) {
     private class Watched(
@@ -103,8 +108,7 @@ class SlaWatcher(
         // One incident per outage, not one per check.
         if (silentFor < threshold || entry.incidentSince != null) return
 
-        entry.incidentSince = at
-        onIncident(Incident(code, entry.market, silentFor, entry.lastSeenAt))
+        if (onIncident(Incident(code, entry.market, silentFor, entry.lastSeenAt))) entry.incidentSince = at
     }
 
     private fun between(

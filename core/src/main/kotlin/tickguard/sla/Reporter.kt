@@ -1,6 +1,7 @@
 package tickguard.sla
 
 import tickguard.rules.Signal
+import java.time.Instant
 import java.time.InstantSource
 import kotlin.math.roundToLong
 import kotlin.time.Duration
@@ -23,6 +24,11 @@ data class ReporterStats(
  * while held back — every feed goes quiet while the IP is refused, and that
  * cause was reported once already — would otherwise end in a "recovered"
  * alert for something the reader never heard about.
+ *
+ * A held-back incident is not forgotten. The watcher offers it again at every
+ * check, and once the cause is resolved a feed that is still silent is paged
+ * like any other: the IP being allowed again does not mean every feed came
+ * back with it. A held outage is counted once, not once per check.
  */
 class IncidentReporter(
     private val report: (Signal) -> Unit,
@@ -31,15 +37,20 @@ class IncidentReporter(
     private val clock: InstantSource = InstantSource.system(),
 ) {
     private val open = LinkedHashSet<String>()
+
+    /** When each held-back silence began: the same outage offered again is not counted again. */
+    private val heldSince = LinkedHashMap<String, Instant>()
     private var reported = 0
     private var held = 0
     private var recovered = 0
 
-    fun incident(incident: Incident) {
+    /** True when paged; false when held back. */
+    fun incident(incident: Incident): Boolean {
         if (inhibited()) {
-            held += 1
-            return
+            if (heldSince.put(incident.code, incident.since) != incident.since) held += 1
+            return false
         }
+        heldSince -= incident.code
         open += incident.code
         reported += 1
         report(
@@ -51,6 +62,7 @@ class IncidentReporter(
                 firedAt = clock.instant(),
             ),
         )
+        return true
     }
 
     fun recovered(

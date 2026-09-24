@@ -235,9 +235,8 @@ class Tickguard(
             isOpen = calendar::isOpen,
             threshold = config.slaThreshold,
             clock = clock,
-            onIncident = {
-                counters.incidents.incrementAndGet()
-                incidents.incident(it)
+            onIncident = { incident ->
+                incidents.incident(incident).also { paged -> if (paged) counters.incidents.incrementAndGet() }
             },
             onRecovered = { code, silentFor ->
                 log.info("sla: {} recovered", code)

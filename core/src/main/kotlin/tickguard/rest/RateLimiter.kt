@@ -23,6 +23,11 @@ data class RateLimiterStats(
  * release a whole second's worth at once, which is exactly the burst the limit
  * is there to prevent.
  *
+ * Tokens come back at 95% of the documented rate. The server's window is not
+ * aligned with this clock, and at exactly the limit a call that lands a few
+ * milliseconds early by the server's reckoning is a 429 — for ACCOUNT, at one
+ * call a second, that is any jitter at all. hummingbot keeps the same margin.
+ *
  * The limit is re-read on every acquire, because one group is cut during the
  * opening auction and a cached limit would be wrong for those ten minutes.
  *
@@ -55,7 +60,7 @@ class RateLimiter(
                     return
                 }
                 val capacity = limitAt(group, Instant.ofEpochMilli(at))
-                val waitMs = ceil((1 - bucket.tokens) / capacity * MILLIS_PER_SECOND).toLong()
+                val waitMs = ceil((1 - bucket.tokens) / (capacity * SAFETY) * MILLIS_PER_SECOND).toLong()
                 waits += 1
                 totalWaitMs += waitMs
                 waitMs.milliseconds
@@ -93,13 +98,16 @@ class RateLimiter(
     ): Bucket {
         val capacity = limitAt(group, Instant.ofEpochMilli(at)).toDouble()
         val bucket = buckets.getOrPut(group) { Bucket(capacity, at) }
-        val gained = (at - bucket.updatedAt) / MILLIS_PER_SECOND * capacity
+        val gained = (at - bucket.updatedAt) / MILLIS_PER_SECOND * capacity * SAFETY
         bucket.tokens = min(capacity, bucket.tokens + gained)
         bucket.updatedAt = at
         return bucket
     }
 
     private companion object {
+        /** Refill at this share of the documented rate, so clock misalignment cannot tip a call over. */
+        const val SAFETY = 0.95
+
         /** Limits are per second; the clock is in milliseconds. */
         const val MILLIS_PER_SECOND = 1_000.0
     }

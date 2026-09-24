@@ -22,3 +22,8 @@ dependencies {
     testImplementation(libs.mockwebserver)
     testImplementation(testFixtures(project(":core")))
 }
+
+// .env and tickguard.db sit at the repository root, as they did for the original.
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    workingDir = rootDir
+}

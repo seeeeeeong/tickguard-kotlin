@@ -36,3 +36,19 @@ tasks.register<JavaExec>("verdictScore") {
     mainClass.set("tickguard.tools.VerdictScoreKt")
     workingDir = rootDir
 }
+
+tasks.register<JavaExec>("backtest") {
+    group = "tickguard"
+    description = "Replays recorded ticks through a rule and reports what followed each fire."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.BacktestKt")
+    workingDir = rootDir
+}
+
+tasks.register<JavaExec>("parity") {
+    group = "tickguard"
+    description = "Compares the Kotlin replay of a database with the original's golden, byte for byte."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.ParityKt")
+    workingDir = rootDir
+}

@@ -1,6 +1,8 @@
 package tickguard.runner
 
 import tickguard.holdings.HoldingsStats
+import tickguard.news.NewsCollectorStats
+import tickguard.news.NewsSourceName
 import tickguard.pipeline.InboxStats
 import tickguard.pipeline.Lane
 import tickguard.rest.RateLimiterStats
@@ -8,6 +10,8 @@ import tickguard.rules.RuleEngineStats
 import tickguard.sla.ReporterStats
 import tickguard.sla.SlaStats
 import tickguard.subscribe.CoordinatorSnapshot
+import tickguard.verdict.VerdictWorkerStats
+import java.time.Instant
 import kotlin.time.Duration
 
 /**
@@ -27,6 +31,10 @@ internal data class Snapshot(
     val holdings: HoldingsStats,
     val limiter: RateLimiterStats,
     val inbox: InboxStats,
+    val news: NewsCollectorStats,
+    /** Null when no LLM key is configured. */
+    val verdicts: VerdictWorkerStats?,
+    val secPausedUntil: Instant?,
 ) {
     companion object {
         /** What readers see before the engine has published its first snapshot. */
@@ -47,6 +55,14 @@ internal data class Snapshot(
                         0,
                         Lane.entries.associateWith { 0 },
                     ),
+                news =
+                    NewsCollectorStats(
+                        NewsSourceName.entries.associateWith { 0 },
+                        NewsSourceName.entries.associateWith { 0 },
+                        null,
+                    ),
+                verdicts = null,
+                secPausedUntil = null,
             )
 
         /** Taken on the engine. */
@@ -59,6 +75,9 @@ internal data class Snapshot(
                 holdings = app.holdings.stats(),
                 limiter = app.rest.limiter.stats(),
                 inbox = app.inbox.stats(),
+                news = app.news.stats(),
+                verdicts = app.verdicts?.stats(),
+                secPausedUntil = app.sec?.pausedUntil(),
             )
     }
 }

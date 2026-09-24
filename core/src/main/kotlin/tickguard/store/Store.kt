@@ -1,10 +1,9 @@
 package tickguard.store
 
-import tickguard.news.NewsItem
-import tickguard.news.NewsSourceName
+import tickguard.news.NewsStore
 import tickguard.rules.CooldownStore
 import tickguard.subscribe.RejectionStore
-import tickguard.verdict.Verdict
+import tickguard.verdict.VerdictStore
 import java.time.Instant
 
 /**
@@ -57,62 +56,6 @@ interface TickStore {
     suspend fun pruneTicks(olderThan: Instant): Int
 }
 
-/** What the news collector keeps, so a re-poll is not news. */
-interface NewsStore {
-    /** False when this story was already stored for this symbol. */
-    suspend fun recordNews(
-        item: NewsItem,
-        seenAt: Instant,
-    ): Boolean
-
-    /** One symbol's stories published at or after `since`, newest first. */
-    suspend fun newsFor(
-        code: String,
-        since: Instant,
-    ): List<StoredNews>
-
-    suspend fun pruneNews(olderThan: Instant): Int
-}
-
-/** What the verdict worker needs: stories to judge, verdicts made, and the day's call budget. */
-interface VerdictStore {
-    /**
-     * Stories published at or after `since` that still need a verdict: never
-     * tried, or failed with a retry now due. Newest first, so a tight budget
-     * spends itself on what is still news.
-     */
-    suspend fun pendingVerdicts(
-        since: Instant,
-        now: Instant,
-        limit: Int,
-    ): List<PendingStory>
-
-    suspend fun recordVerdict(
-        story: NewsKey,
-        verdict: Verdict,
-        model: String,
-        at: Instant,
-    )
-
-    suspend fun recordVerdictFailure(
-        story: NewsKey,
-        error: String,
-        attempts: Int,
-        retryAt: Instant,
-    )
-
-    suspend fun verdictFor(story: NewsKey): StoredVerdict?
-
-    suspend fun recordModelCall(at: Instant)
-
-    suspend fun modelCallsSince(since: Instant): Int
-
-    suspend fun pruneVerdicts(olderThan: Instant): Int
-}
-
-/** A story that fails this often is left alone; its headline is the problem. */
-const val MAX_VERDICT_ATTEMPTS = 5
-
 data class StoredSignal(
     val key: String,
     val ruleId: String,
@@ -139,29 +82,4 @@ data class TickRow(
     val tradedAt: Instant,
     /** Our clock at decode. The gap to `tradedAt` is the feed's latency. */
     val receivedAt: Instant,
-)
-
-/** Identifies a story: one headline, from one source, about one symbol. */
-data class NewsKey(
-    val source: NewsSourceName,
-    val id: String,
-    val code: String,
-)
-
-data class StoredNews(
-    val item: NewsItem,
-    val seenAt: Instant,
-) {
-    val key get() = NewsKey(item.source, item.id, item.code)
-}
-
-data class PendingStory(
-    val news: StoredNews,
-    val attempts: Int,
-)
-
-data class StoredVerdict(
-    val verdict: Verdict,
-    val model: String,
-    val judgedAt: Instant,
 )

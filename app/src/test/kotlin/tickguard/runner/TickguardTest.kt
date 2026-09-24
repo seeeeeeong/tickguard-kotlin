@@ -9,6 +9,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -23,6 +28,8 @@ import tickguard.store.sqlite.SqliteStore
 import java.nio.file.Files
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -55,6 +62,29 @@ class TickguardTest {
     private fun calendar() =
         """{"result":{"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(1)}"}}}}"""
 
+    /** One fresh headline about AAPL, published ten minutes ago. */
+    private fun feed() =
+        "<rss><channel><item><title>Apple sued over App Store fees - CNBC</title><link>https://x</link>" +
+            "<pubDate>${DateTimeFormatter.RFC_1123_DATE_TIME.format(
+                ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(10),
+            )}</pubDate>" +
+            "<source url=\"https://c\">CNBC</source></item></channel></rss>"
+
+    /**
+     * A weighty, relevant verdict. 0.725 is stored as 0.72499…, so the
+     * original's toFixed(2) wrote 0.72 where Java's %.2f would write 0.73.
+     */
+    private fun completion() =
+        buildJsonObject {
+            putJsonArray("choices") {
+                addJsonObject {
+                    putJsonObject("message") {
+                        put("content", """{"relevant":true,"direction":"down","impact":0.725,"summary":"애플이 제소됐다."}""")
+                    }
+                }
+            }
+        }.toString()
+
     private fun trade(price: String) =
         """{"type":"message","topic":"trade:us:AAPL","data":{"price":"$price","volume":"1",""" +
             """"timestamp":"${OffsetDateTime.now(ZoneOffset.ofHours(9))}","currency":"USD"}}"""
@@ -80,6 +110,14 @@ class TickguardTest {
 
                 path == "/api/v1/prices" -> {
                     json("""{"result":[{"symbol":"AAPL","lastPrice":"90"}]}""")
+                }
+
+                path == "/rss/search" -> {
+                    json(feed())
+                }
+
+                path == "/chat/completions" -> {
+                    json(completion())
                 }
 
                 path == "/ws" -> {
@@ -129,6 +167,37 @@ class TickguardTest {
         condition: () -> Boolean,
     ) = withTimeout(within) { while (!condition()) delay(20) }
 
+    private fun app(
+        base: String,
+        alerts: MutableList<String>,
+        extra: Map<String, String> = emptyMap(),
+    ): Tickguard {
+        val env =
+            mapOf(
+                "TOSS_CLIENT_ID" to "id",
+                "TOSS_CLIENT_SECRET" to "secret",
+                "TOSS_ACCOUNT_SEQ" to "1",
+                "TICKGUARD_DRAWDOWN_FOR_MS" to "1",
+                "TICKGUARD_GROUP_WAIT_MS" to "1",
+            ) + extra
+        return Tickguard(
+            config = loadConfig { env[it] },
+            store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString()),
+            http = OkHttpClient(),
+            engine = engine,
+            background = background,
+            endpoints =
+                Endpoints(
+                    token = "$base/oauth2/token",
+                    rest = base,
+                    ws = base.replaceFirst("http", "ws") + "/ws",
+                    googleNews = base,
+                    deepSeek = base,
+                ),
+            alerts = { alerts += it },
+        )
+    }
+
     @Test
     fun `fires a drawdown from a fake Toss end to end, and alerts in the original's words`() =
         runTest {
@@ -136,31 +205,8 @@ class TickguardTest {
                 server.dispatcher = FakeToss()
                 server.start()
                 val base = server.url("/").toString().trimEnd('/')
-                val env =
-                    mapOf(
-                        "TOSS_CLIENT_ID" to "id",
-                        "TOSS_CLIENT_SECRET" to "secret",
-                        "TOSS_ACCOUNT_SEQ" to "1",
-                        "TICKGUARD_DRAWDOWN_FOR_MS" to "1",
-                        "TICKGUARD_GROUP_WAIT_MS" to "1",
-                    )
                 val alerts = CopyOnWriteArrayList<String>()
-                val app =
-                    Tickguard(
-                        config = loadConfig { env[it] },
-                        store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString()),
-                        http = OkHttpClient(),
-                        engine = engine,
-                        background = background,
-                        endpoints =
-                            Endpoints(
-                                token = "$base/oauth2/token",
-                                rest = base,
-                                ws =
-                                    base.replaceFirst("http", "ws") + "/ws",
-                            ),
-                        alerts = { alerts += it },
-                    )
+                val app = app(base, alerts)
 
                 engine.launch { app.start() }
 
@@ -176,6 +222,31 @@ class TickguardTest {
                 app.tasks.publishSnapshot()
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
                 assertThat(panels).containsEntry("startup", "ready").containsEntry("subscribed", "1 topics")
+
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `alerts on a fresh, weighty headline for a held US symbol, in the original's words`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val alerts = CopyOnWriteArrayList<String>()
+                val app = app(server.url("/").toString().trimEnd('/'), alerts, mapOf("TICKGUARD_LLM_API_KEY" to "k"))
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) { app.tasks.collectNews() }
+                eventually { alerts.any { "애플이 제소됐다" in it } }
+
+                assertThat(alerts.first { "애플이 제소됐다" in it })
+                    .contains("AAPL ▼ 애플이 제소됐다.\nCNBC · 영향 0.72\nApple sued over App Store fees\n· news")
+                app.tasks.publishSnapshot()
+                val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
+                assertThat(panels["news"]).startsWith("google 1 · sec off · 0m ago")
+                assertThat(panels["verdicts"]).isEqualTo("judged 1 · failed 0 · today 1/300")
 
                 withContext(engine.coroutineContext) { app.stop() }
             }

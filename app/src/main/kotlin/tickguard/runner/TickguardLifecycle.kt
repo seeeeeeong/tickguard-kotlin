@@ -81,6 +81,7 @@ class TickguardLifecycle(
                     ScheduledTask("sla", config.intervals.slaCheck) { app.tasks.checkSla() },
                     ScheduledTask("reconcile", config.intervals.reconcile) { app.tasks.reconcile() },
                     ScheduledTask("prune", config.intervals.prune) { app.tasks.prune() },
+                    ScheduledTask("news", config.intervals.news, immediate = true) { app.tasks.collectNews() },
                     dailyTask("calendar") { app.tasks.loadCalendars() },
                 ),
             scope = engine,

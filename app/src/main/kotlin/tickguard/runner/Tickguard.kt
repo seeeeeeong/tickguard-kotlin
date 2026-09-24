@@ -10,6 +10,8 @@ import okhttp3.OkHttpClient
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import tickguard.auth.TokenManager
+import tickguard.fallback.FallbackSymbol
+import tickguard.fallback.RestQuoteFallback
 import tickguard.gateway.ServerFrame
 import tickguard.gateway.SocketFactory
 import tickguard.gateway.WS_URL
@@ -29,8 +31,10 @@ import tickguard.notify.slack.SlackChannel
 import tickguard.notify.toNotification
 import tickguard.pipeline.Inbox
 import tickguard.pipeline.Pump
+import tickguard.pipeline.TickWriter
 import tickguard.reconcile.Reconciler
 import tickguard.reconcile.StreamedPrice
+import tickguard.rest.fetchPrices
 import tickguard.rules.RuleEngine
 import tickguard.rules.Signal
 import tickguard.rules.WindowStore
@@ -41,8 +45,10 @@ import tickguard.sla.IncidentReporter
 import tickguard.sla.Market
 import tickguard.sla.SlaWatcher
 import tickguard.store.Store
+import tickguard.store.TickRow
 import tickguard.stream.Decimal
 import tickguard.stream.DecodeResult
+import tickguard.stream.Trade
 import tickguard.stream.decodeTrade
 import tickguard.subscribe.SubscriptionCoordinator
 import tickguard.subscribe.Topic
@@ -57,6 +63,7 @@ import tickguard.verdict.deepseek.DeepSeekJudge
 import java.time.Duration
 import java.time.Instant
 import java.time.InstantSource
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.toJavaDuration
 
 /** Where Toss and the news services are. Overridden only to point at a local server in tests. */
@@ -173,7 +180,7 @@ class Tickguard(
     internal val news =
         NewsCollector(
             sources = listOfNotNull<NewsSource>(GoogleNewsSource(http, endpoints.googleNews), sec),
-            codes = ::usCodes,
+            codes = { usCodes(holdings.current().markets, config.extraSymbols) },
             sink = store,
             clock = clock,
             onError = { error, source, code -> log.error("news {} {}: {}", source.wire, code, reasonOf(error)) },
@@ -186,10 +193,12 @@ class Tickguard(
                 judge = DeepSeekJudge(apiKey, http, config.llm.model, endpoints.deepSeek),
                 dailyLimit = config.llm.dailyLimit,
                 clock = clock,
-                onVerdict = ::alertOnNews,
+                onVerdict = NewsAlerts(config.newsAlertImpact, clock, ::report)::alert,
                 onError = { error, story -> log.error("verdict {} failed: {}", story.item.code, reasonOf(error)) },
             )
         }
+
+    private val restJudging = RestJudging(::report)
 
     internal val rules =
         RuleEngine(
@@ -205,7 +214,7 @@ class Tickguard(
             positions = { holdings.current().positions },
             windows = windows,
             clock = clock,
-            onSignal = ::report,
+            onSignal = restJudging::onSignal,
             onRuleError = { error, ruleId -> log.error("rule {} threw: {}", ruleId, error.message) },
             onStoreError = { log.error("cooldown not stored: {}", reasonOf(it)) },
             cooldowns = store,
@@ -240,6 +249,35 @@ class Tickguard(
             clock = clock,
             onDrift = { log.warn("drift {}: {}%", it.code, (it.ratio * Decimal.HUNDRED).format(3)) },
             onError = { log.error("reconcile failed: {}", reasonOf(it)) },
+        )
+
+    internal val fallback =
+        RestQuoteFallback(
+            fetchPrices = { fetchPrices(rest, it) },
+            symbols = { fallbackSymbols(holdings.current().markets, config.extraSymbols) },
+            isMarketOpen = calendar::isOpen,
+            streamSilentFor = { (clock.millis() - lastQuoteAt.toEpochMilli()).milliseconds },
+            paused = { link.blockedSince != null },
+            onQuote = { restJudging.evaluate(it, rules) },
+            onError = { log.error("fallback quotes failed: {}", reasonOf(it)) },
+            silence = config.fallback.silence,
+            clock = clock,
+        )
+
+    private var loggedRecordFailure = false
+
+    internal val ticks =
+        TickWriter(
+            write = store::recordTicks,
+            scope = engine,
+            onError = {
+                // Logged once: a disk that is full stays full, and a line per batch
+                // would bury everything else. The counts carry the rest.
+                if (!loggedRecordFailure) {
+                    loggedRecordFailure = true
+                    log.error("recording ticks failed: {}", reasonOf(it))
+                }
+            },
         )
 
     internal val pump =
@@ -299,6 +337,8 @@ class Tickguard(
         pump.stop()
         grouper.flush()
         notifier.drain()
+        // What is queued is written before the store closes under it.
+        ticks.stop()
         store.close()
     }
 
@@ -320,6 +360,8 @@ class Tickguard(
         suspend fun loadCalendars() {
             coroutineScope { listOf(Market.KR, Market.US).map { async { calendar.load(it) } }.awaitAll() }
         }
+
+        suspend fun pollFallbackQuotes() = fallback.run()
 
         suspend fun collectNews() {
             for (item in news.run()) log.info("news {} [{}] {}", item.code, item.publisher, item.title)
@@ -358,6 +400,29 @@ class Tickguard(
         lastSeen[trade.code] = StreamedPrice(trade.price, receivedAt)
         sla.observed(trade.code, marketOf(trade.type))
         rules.evaluate(trade)
+        record(trade, receivedAt)
+    }
+
+    /**
+     * After the rules, and never allowed to throw into the pump: a full disk
+     * or a locked database costs history, which a backtest can live without,
+     * and must not cost the alert this tick was about to raise.
+     */
+    private fun record(
+        trade: Trade,
+        receivedAt: Instant,
+    ) {
+        ticks.add(
+            TickRow(
+                type = trade.type,
+                code = trade.code,
+                price = trade.price.toPlainString(),
+                volume = trade.volume.toPlainString(),
+                currency = trade.currency,
+                tradedAt = trade.at,
+                receivedAt = receivedAt,
+            ),
+        )
     }
 
     private fun onHoldingsChange(
@@ -376,58 +441,6 @@ class Tickguard(
             added.joinToString(",").ifEmpty { "-" },
             removed.joinToString(",").ifEmpty { "-" },
         )
-    }
-
-    /**
-     * A story alone becomes an alert only when it is relevant, weighty and
-     * fresh. Fresh, because every story from the last day is judged, and the
-     * first run after a start would otherwise send yesterday's news as if it
-     * had just broken.
-     */
-    private fun alertOnNews(
-        story: StoredNews,
-        verdict: Verdict,
-    ) {
-        val item = story.item
-        val arrow =
-            when (verdict.direction) {
-                Direction.UP -> "▲"
-                Direction.DOWN -> "▼"
-                Direction.NEUTRAL -> "·"
-            }
-        val impact = verdict.impact.toFixed(2)
-        log.info(
-            "verdict {} {}{} {}: {}",
-            item.code,
-            arrow,
-            impact,
-            if (verdict.relevant) "relevant" else "filler",
-            verdict.summary,
-        )
-        if (!verdict.relevant || verdict.impact < config.newsAlertImpact) return
-        val now = clock.instant()
-        if (Duration.between(item.publishedAt, now) > NEWS_ALERT_MAX_AGE) return
-        report(
-            Signal(
-                ruleId = "news",
-                code = item.code,
-                title = "${item.code} $arrow ${verdict.summary}",
-                detail = "${item.publisher} · 영향 $impact\n${item.title}",
-                firedAt = now,
-            ),
-        )
-    }
-
-    /** Both news sources cover US listings; KR needs DART, which is not wired yet. */
-    private fun usCodes(): List<String> {
-        val held =
-            holdings
-                .current()
-                .markets
-                .filterValues { it == "trade:us" }
-                .keys
-        val extra = config.extraSymbols.filter { it.type == "trade:us" }.map { it.code }
-        return (held + extra).distinct()
     }
 
     private fun watchExtraSymbols() {
@@ -465,12 +478,6 @@ class Tickguard(
 
     private companion object {
         val log: Logger = LoggerFactory.getLogger(Tickguard::class.java)
-
-        /**
-         * Older than this and a story is history, not news: it was judged late,
-         * after a restart or an outage, and alerting now would mislead.
-         */
-        val NEWS_ALERT_MAX_AGE: Duration = Duration.ofHours(2)
 
         /** The console channel's output: alert text, one per line. */
         val alertLog: Logger = LoggerFactory.getLogger("tickguard.alerts")

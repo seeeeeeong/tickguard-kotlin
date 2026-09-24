@@ -1,10 +1,12 @@
 package tickguard.runner
 
+import tickguard.fallback.FallbackStats
 import tickguard.holdings.HoldingsStats
 import tickguard.news.NewsCollectorStats
 import tickguard.news.NewsSourceName
 import tickguard.pipeline.InboxStats
 import tickguard.pipeline.Lane
+import tickguard.pipeline.TickWriterStats
 import tickguard.rest.RateLimiterStats
 import tickguard.rules.RuleEngineStats
 import tickguard.sla.ReporterStats
@@ -35,6 +37,8 @@ internal data class Snapshot(
     /** Null when no LLM key is configured. */
     val verdicts: VerdictWorkerStats?,
     val secPausedUntil: Instant?,
+    val fallback: FallbackStats,
+    val ticks: TickWriterStats,
 ) {
     companion object {
         /** What readers see before the engine has published its first snapshot. */
@@ -63,6 +67,8 @@ internal data class Snapshot(
                     ),
                 verdicts = null,
                 secPausedUntil = null,
+                fallback = FallbackStats(active = false, polls = 0, quotes = 0, failures = 0),
+                ticks = TickWriterStats(0, 0, 0, 0),
             )
 
         /** Taken on the engine. */
@@ -78,6 +84,8 @@ internal data class Snapshot(
                 news = app.news.stats(),
                 verdicts = app.verdicts?.stats(),
                 secPausedUntil = app.sec?.pausedUntil(),
+                fallback = app.fallback.stats(),
+                ticks = app.ticks.stats(),
             )
     }
 }

@@ -48,6 +48,9 @@ class TickguardTest {
     private val engine = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** Off to model a socket that stays open and delivers nothing. */
+    @Volatile private var streamTrades = true
+
     @AfterEach
     fun tearDown() {
         engine.cancel()
@@ -154,7 +157,7 @@ class TickguardTest {
             declarations += text
             val id = Regex("\"id\":\"([^\"]+)\"").find(text)?.groupValues?.get(1)
             webSocket.send("""{"type":"subscriptions","id":"$id","subscribed":[],"rejected":[]}""")
-            if ("AAPL" in text) {
+            if ("AAPL" in text && streamTrades) {
                 webSocket.send(trade("90"))
                 // A second print a moment later, so the one-millisecond hold has held.
                 later.schedule({ webSocket.send(trade("90")) }, 100, TimeUnit.MILLISECONDS)
@@ -219,9 +222,11 @@ class TickguardTest {
                 assertThat(alerts.first { "AAPL" in it }).contains("현재 90 · 평단 100 · 보유 1").contains("· drawdown-7pct")
                 assertThat(app.counters.ticks.get()).isGreaterThanOrEqualTo(2)
 
+                withContext(engine.coroutineContext) { app.ticks.flush() }
                 app.tasks.publishSnapshot()
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
                 assertThat(panels).containsEntry("startup", "ready").containsEntry("subscribed", "1 topics")
+                assertThat(panels["recorded"]).matches("[2-9]\\d* · 0 failed · 0 dropped")
 
                 withContext(engine.coroutineContext) { app.stop() }
             }
@@ -247,6 +252,41 @@ class TickguardTest {
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
                 assertThat(panels["news"]).startsWith("google 1 · sec off · 0m ago")
                 assertThat(panels["verdicts"]).isEqualTo("judged 1 · failed 0 · today 1/300")
+
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `judges over REST while the stream is silent, and says so in the alert`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                streamTrades = false
+                server.dispatcher = FakeToss()
+                server.start()
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_FALLBACK_SILENCE_MS" to "1"),
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                // Two polls, so the one-millisecond hold has held.
+                withContext(engine.coroutineContext) { app.tasks.pollFallbackQuotes() }
+                delay(20)
+                withContext(engine.coroutineContext) { app.tasks.pollFallbackQuotes() }
+                eventually { alerts.any { "AAPL 평단 대비" in it } }
+
+                assertThat(alerts.first { "AAPL 평단 대비" in it }).contains("\n(스트림 끊김 · REST 시세로 판단)\n· drawdown-7pct")
+                // A REST price is not a trade: nothing was recorded for a backtest to replay.
+                withContext(engine.coroutineContext) { app.ticks.flush() }
+                assertThat(app.ticks.stats().written).isZero()
+                app.tasks.publishSnapshot()
+                val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
+                assertThat(panels["fallback"]).startsWith("REST polling · stream silent")
 
                 withContext(engine.coroutineContext) { app.stop() }
             }

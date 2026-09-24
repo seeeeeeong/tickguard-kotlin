@@ -113,7 +113,8 @@ fun loadConfig(env: (String) -> String?): Config {
         // 0.7 fired on nothing in a day and a half of news, missing a 5% drop
         // with a stated cause (scored 0.60) and a lock-up expiry (0.50). At 0.6
         // one of the two pages, at one false alarm in the labelled set; 0.5
-        // catches both at four. eval/verdict-labels.csv holds the measurement.
+        // catches both at four. The labelled set behind this is the original
+        // repository's eval/verdict-labels.csv; tools verdict-score re-measures it.
         newsAlertImpact = read.number(read.ratio("TICKGUARD_NEWS_ALERT_IMPACT", "0.6")) ?: 0.0,
         groupWait = read.duration("TICKGUARD_GROUP_WAIT_MS", 30.seconds),
         intervals =

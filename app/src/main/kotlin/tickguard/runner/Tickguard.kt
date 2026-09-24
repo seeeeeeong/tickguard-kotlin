@@ -16,6 +16,11 @@ import tickguard.gateway.WS_URL
 import tickguard.holdings.HoldingsStore
 import tickguard.network.PublicIpLookup
 import tickguard.network.reasonOf
+import tickguard.news.GoogleNewsSource
+import tickguard.news.NewsCollector
+import tickguard.news.NewsSource
+import tickguard.news.SecSource
+import tickguard.news.StoredNews
 import tickguard.notify.Channel
 import tickguard.notify.ConsoleChannel
 import tickguard.notify.Grouper
@@ -41,18 +46,28 @@ import tickguard.stream.DecodeResult
 import tickguard.stream.decodeTrade
 import tickguard.subscribe.SubscriptionCoordinator
 import tickguard.subscribe.Topic
+import tickguard.text.toFixed
 import tickguard.toss.auth.TossAuthClient
 import tickguard.toss.gateway.OkHttpSocketFactory
 import tickguard.toss.rest.OkHttpRestClient
+import tickguard.verdict.Direction
+import tickguard.verdict.Verdict
+import tickguard.verdict.VerdictWorker
+import tickguard.verdict.deepseek.DeepSeekJudge
+import java.time.Duration
 import java.time.Instant
 import java.time.InstantSource
 import kotlin.time.toJavaDuration
 
-/** Where Toss is. Overridden only to point at a local server in tests. */
+/** Where Toss and the news services are. Overridden only to point at a local server in tests. */
 data class Endpoints(
     val token: String = TossAuthClient.TOKEN_URL,
     val rest: String = OkHttpRestClient.REST_BASE_URL,
     val ws: String = WS_URL,
+    val googleNews: String = "https://news.google.com",
+    val secTickers: String = SecSource.TICKERS_URL,
+    val secSubmissions: String = "https://data.sec.gov",
+    val deepSeek: String = "https://api.deepseek.com",
 )
 
 /**
@@ -149,6 +164,32 @@ class Tickguard(
             onChange = ::onHoldingsChange,
             onError = { log.error("holdings refresh failed: {}", reasonOf(it)) },
         )
+
+    internal val sec =
+        config.secContact?.let {
+            SecSource(it, http, clock, tickersUrl = endpoints.secTickers, submissionsBase = endpoints.secSubmissions)
+        }
+
+    internal val news =
+        NewsCollector(
+            sources = listOfNotNull<NewsSource>(GoogleNewsSource(http, endpoints.googleNews), sec),
+            codes = ::usCodes,
+            sink = store,
+            clock = clock,
+            onError = { error, source, code -> log.error("news {} {}: {}", source.wire, code, reasonOf(error)) },
+        )
+
+    internal val verdicts =
+        config.llm.apiKey?.let { apiKey ->
+            VerdictWorker(
+                store = store,
+                judge = DeepSeekJudge(apiKey, http, config.llm.model, endpoints.deepSeek),
+                dailyLimit = config.llm.dailyLimit,
+                clock = clock,
+                onVerdict = ::alertOnNews,
+                onError = { error, story -> log.error("verdict {} failed: {}", story.item.code, reasonOf(error)) },
+            )
+        }
 
     internal val rules =
         RuleEngine(
@@ -280,6 +321,13 @@ class Tickguard(
             coroutineScope { listOf(Market.KR, Market.US).map { async { calendar.load(it) } }.awaitAll() }
         }
 
+        suspend fun collectNews() {
+            for (item in news.run()) log.info("news {} [{}] {}", item.code, item.publisher, item.title)
+            // Right after collection, so a story is judged within one poll of
+            // being seen rather than waiting for a timer of its own.
+            verdicts?.run()
+        }
+
         suspend fun prune() {
             val now = clock.instant()
             val history = now.minus(config.tickRetention.toJavaDuration())
@@ -330,6 +378,58 @@ class Tickguard(
         )
     }
 
+    /**
+     * A story alone becomes an alert only when it is relevant, weighty and
+     * fresh. Fresh, because every story from the last day is judged, and the
+     * first run after a start would otherwise send yesterday's news as if it
+     * had just broken.
+     */
+    private fun alertOnNews(
+        story: StoredNews,
+        verdict: Verdict,
+    ) {
+        val item = story.item
+        val arrow =
+            when (verdict.direction) {
+                Direction.UP -> "▲"
+                Direction.DOWN -> "▼"
+                Direction.NEUTRAL -> "·"
+            }
+        val impact = verdict.impact.toFixed(2)
+        log.info(
+            "verdict {} {}{} {}: {}",
+            item.code,
+            arrow,
+            impact,
+            if (verdict.relevant) "relevant" else "filler",
+            verdict.summary,
+        )
+        if (!verdict.relevant || verdict.impact < config.newsAlertImpact) return
+        val now = clock.instant()
+        if (Duration.between(item.publishedAt, now) > NEWS_ALERT_MAX_AGE) return
+        report(
+            Signal(
+                ruleId = "news",
+                code = item.code,
+                title = "${item.code} $arrow ${verdict.summary}",
+                detail = "${item.publisher} · 영향 $impact\n${item.title}",
+                firedAt = now,
+            ),
+        )
+    }
+
+    /** Both news sources cover US listings; KR needs DART, which is not wired yet. */
+    private fun usCodes(): List<String> {
+        val held =
+            holdings
+                .current()
+                .markets
+                .filterValues { it == "trade:us" }
+                .keys
+        val extra = config.extraSymbols.filter { it.type == "trade:us" }.map { it.code }
+        return (held + extra).distinct()
+    }
+
     private fun watchExtraSymbols() {
         if (config.extraSymbols.isEmpty()) return
         topics.add(config.extraSymbols)
@@ -365,6 +465,12 @@ class Tickguard(
 
     private companion object {
         val log: Logger = LoggerFactory.getLogger(Tickguard::class.java)
+
+        /**
+         * Older than this and a story is history, not news: it was judged late,
+         * after a restart or an outage, and alerting now would mislead.
+         */
+        val NEWS_ALERT_MAX_AGE: Duration = Duration.ofHours(2)
 
         /** The console channel's output: alert text, one per line. */
         val alertLog: Logger = LoggerFactory.getLogger("tickguard.alerts")

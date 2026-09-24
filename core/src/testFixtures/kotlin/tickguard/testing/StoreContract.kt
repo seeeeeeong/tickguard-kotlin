@@ -12,13 +12,13 @@ import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import tickguard.news.NewsItem
+import tickguard.news.NewsKey
 import tickguard.news.NewsSourceName
 import tickguard.rules.Outcome
 import tickguard.rules.Rule
 import tickguard.rules.RuleContext
 import tickguard.rules.RuleEngine
 import tickguard.rules.Signal
-import tickguard.store.NewsKey
 import tickguard.store.Store
 import tickguard.store.TickRow
 import tickguard.subscribe.SubscriptionCoordinator

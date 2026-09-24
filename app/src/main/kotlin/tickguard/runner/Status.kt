@@ -1,10 +1,13 @@
 package tickguard.runner
 
+import tickguard.news.NewsSourceName
 import tickguard.observability.Metrics
 import tickguard.observability.StatusPanel
 import tickguard.pipeline.Lane
+import tickguard.text.toFixed
 import java.time.Instant
 import java.util.Locale
+import kotlin.math.ceil
 
 /** The status page, from the latest snapshot and the counters. First line is what start() is waiting on. */
 internal fun statusPanels(
@@ -42,15 +45,61 @@ internal fun statusPanels(
         StatusPanel("queue wait max", "${waitMs}ms / 2000ms", ok = waitMs < QUEUE_WAIT_BUDGET_MS),
         StatusPanel(
             "ws↔rest drift",
-            "%.3f%%".format(Locale.ROOT, app.worstDrift * PERCENT),
+            "${(app.worstDrift * PERCENT).toFixed(DRIFT_PLACES)}%",
             ok =
                 app.worstDrift < DRIFT_TOLERANCE,
         ),
         StatusPanel("subscribed", "${s.topics.desired.size} topics"),
         StatusPanel("rejected", "${s.topics.rejected.size}", ok = s.topics.rejected.isEmpty()),
         StatusPanel("signals", "${s.rules.fired} fired · ${s.rules.suppressed} suppressed"),
+        newsPanel(app, s, now),
+        verdictPanel(s),
         StatusPanel("notify failed", "${app.notifier.stats().abandoned}", ok = app.notifier.stats().abandoned == 0),
         StatusPanel("sla watching", "${s.sla.watched} (${s.sla.open} open)"),
+    )
+}
+
+private fun newsPanel(
+    app: Tickguard,
+    s: Snapshot,
+    now: Instant,
+): StatusPanel {
+    val collected = s.news.collected
+    val paused = s.secPausedUntil
+    val sec =
+        when {
+            app.sec == null -> "sec off"
+
+            paused != null -> "sec paused ${ceil(
+                (paused.toEpochMilli() - now.toEpochMilli()) / MILLIS_PER_MINUTE,
+            ).toLong()}m (403)"
+
+            else -> "sec ${collected[NewsSourceName.SEC]}"
+        }
+    val lastRunAt = s.news.lastRunAt
+    val age =
+        if (lastRunAt ==
+            null
+        ) {
+            "아직 없음"
+        } else {
+            "${Math.round((now.toEpochMilli() - lastRunAt.toEpochMilli()) / MILLIS_PER_MINUTE)}m ago"
+        }
+    return StatusPanel(
+        "news",
+        "google ${collected[NewsSourceName.GOOGLE_NEWS]} · $sec · $age",
+        ok =
+            s.news.failed.values
+                .sum() == 0,
+    )
+}
+
+private fun verdictPanel(s: Snapshot): StatusPanel {
+    val stats = s.verdicts ?: return StatusPanel("verdicts", "off (no LLM key)")
+    return StatusPanel(
+        "verdicts",
+        "judged ${stats.judged} · failed ${stats.failed} · today ${stats.usedToday}/${stats.dailyLimit}",
+        ok = stats.usedToday < stats.dailyLimit,
     )
 }
 
@@ -102,8 +151,30 @@ internal fun registerMetrics(
     metrics.fromStats("tickguard.notify", "Delivery outcomes.", counter = true) {
         with(app.notifier.stats()) { mapOf("delivered" to delivered, "retried" to retried, "abandoned" to abandoned) }
     }
+    registerNewsMetrics(app, metrics)
     metrics.fromStats("tickguard.ratelimit", "REST limiter.", counter = true) {
         with(app.snapshot.limiter) { mapOf("waits" to waits, "totalWaitMs" to totalWait.inWholeMilliseconds) }
+    }
+}
+
+private fun registerNewsMetrics(
+    app: Tickguard,
+    metrics: Metrics,
+) {
+    metrics.fromStats("tickguard.news.collected", "New stories stored.", counter = true) {
+        app.snapshot.news.collected
+            .mapKeys { it.key.wire }
+    }
+    metrics.fromStats("tickguard.news.failed", "Failed news polls.", counter = true) {
+        app.snapshot.news.failed
+            .mapKeys { it.key.wire }
+    }
+    metrics.fromStats("tickguard.verdicts", "Model verdicts.", counter = true) {
+        val stats = app.snapshot.verdicts
+        mapOf("judged" to (stats?.judged ?: 0), "failed" to (stats?.failed ?: 0))
+    }
+    metrics.gauge("tickguard.model.calls.today", "Model calls since KST midnight.") {
+        app.snapshot.verdicts?.usedToday ?: 0
     }
 }
 
@@ -126,6 +197,9 @@ private const val QUEUE_WAIT_BUDGET_MS = 500
 
 /** Drift under half a percent is the stream agreeing with REST. */
 private const val DRIFT_TOLERANCE = 0.005
+
+/** Drift is shown to a thousandth of a percent, well under the tolerance. */
+private const val DRIFT_PLACES = 3
 
 /** A ratio times this is a percent. */
 private const val PERCENT = 100

@@ -22,3 +22,6 @@ docs/
 
 # JVM heap dumps, written to the working directory on OutOfMemoryError.
 *.hprof
+
+# Labelled headlines for scoring verdicts. They name the symbols held, so they stay local.
+eval/

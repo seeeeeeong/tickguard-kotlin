@@ -10,6 +10,8 @@ data class ReporterStats(
     val reported: Int,
     val inhibited: Int,
     val recovered: Int,
+    /** Silences that ended before they were sent, and so were never sent. */
+    val withdrawn: Int = 0,
 )
 
 /**
@@ -25,6 +27,10 @@ data class ReporterStats(
  * cause was reported once already — would otherwise end in a "recovered"
  * alert for something the reader never heard about.
  *
+ * A silence that ends while its page is still waiting to go out is taken
+ * back instead of paired: silence then recovery, back to back, tells the
+ * reader nothing they need.
+ *
  * A held-back incident is not forgotten. The watcher offers it again at every
  * check, and once the cause is resolved a feed that is still silent is paged
  * like any other: the IP being allowed again does not mean every feed came
@@ -35,6 +41,8 @@ class IncidentReporter(
     /** True while incidents are held back behind a cause already reported. */
     private val inhibited: () -> Boolean,
     private val clock: InstantSource = InstantSource.system(),
+    /** Takes back matching signals not yet sent. True when one was. */
+    private val withdraw: ((Signal) -> Boolean) -> Boolean = { false },
 ) {
     private val open = LinkedHashSet<String>()
 
@@ -43,6 +51,7 @@ class IncidentReporter(
     private var reported = 0
     private var held = 0
     private var recovered = 0
+    private var withdrawn = 0
 
     /** True when paged; false when held back. */
     fun incident(incident: Incident): Boolean {
@@ -55,7 +64,7 @@ class IncidentReporter(
         reported += 1
         report(
             Signal(
-                ruleId = "sla-silence",
+                ruleId = SILENCE,
                 code = incident.code,
                 title = "${incident.code} 시세가 ${minutes(incident.silentFor)}분째 없음",
                 detail = "${incident.market} 시장은 열려 있음",
@@ -70,6 +79,10 @@ class IncidentReporter(
         silentFor: Duration,
     ) {
         if (!open.remove(code)) return
+        if (withdraw { it.ruleId == SILENCE && it.code == code }) {
+            withdrawn += 1
+            return
+        }
         recovered += 1
         report(
             Signal(
@@ -82,13 +95,16 @@ class IncidentReporter(
         )
     }
 
-    fun stats() = ReporterStats(reported = reported, inhibited = held, recovered = recovered)
+    fun stats() = ReporterStats(reported = reported, inhibited = held, recovered = recovered, withdrawn = withdrawn)
 
     /** Rounded half up, and never zero: "0분" reads as no silence at all. */
     private fun minutes(silentFor: Duration): Long =
         maxOf(1, (silentFor.inWholeMilliseconds / MILLIS_PER_MINUTE).roundToLong())
 
     private companion object {
+        /** The rule id a silence page carries, and what a recovery looks for to take back. */
+        const val SILENCE = "sla-silence"
+
         /** Minutes in an alert, from a duration in milliseconds. */
         const val MILLIS_PER_MINUTE = 60_000.0
     }

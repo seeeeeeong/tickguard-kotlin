@@ -59,6 +59,23 @@ class ReporterTest {
     }
 
     @Test
+    fun `takes back a silence that ended before it was sent, and pages nothing for it`() {
+        val waiting = mutableListOf<Signal>()
+        val withdrawing =
+            IncidentReporter({ waiting += it }, { false }, InstantSource { Instant.EPOCH }, withdraw = { matches ->
+                waiting.removeAll(matches)
+            })
+
+        withdrawing.incident(incident("AMZN"))
+        withdrawing.recovered("AMZN", 12.minutes)
+
+        assertThat(waiting).isEmpty()
+        assertThat(
+            withdrawing.stats(),
+        ).isEqualTo(ReporterStats(reported = 1, inhibited = 0, recovered = 0, withdrawn = 1))
+    }
+
+    @Test
     fun `pages each recovery once`() {
         reporter.incident(incident("AMZN"))
 

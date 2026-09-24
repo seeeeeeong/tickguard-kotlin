@@ -113,4 +113,44 @@ class GrouperTest {
 
             assertThat(h.groups).hasSize(1)
         }
+
+    @Test
+    fun `takes back a waiting signal and sends the rest of its group`() =
+        runTest {
+            val h = Harness(this)
+            listOf("AAPL", "TSLA").forEach { h.grouper.add(signal(it)) }
+
+            assertThat(h.grouper.withdraw { it.code == "AAPL" }).isTrue()
+            h.elapse()
+
+            assertThat(
+                h.groups
+                    .single()
+                    .signals
+                    .map { it.code },
+            ).containsExactly("TSLA")
+        }
+
+    @Test
+    fun `sends nothing for a group whose only signal was taken back`() =
+        runTest {
+            val h = Harness(this)
+            h.grouper.add(signal("AAPL"))
+
+            h.grouper.withdraw { it.code == "AAPL" }
+            h.elapse()
+
+            assertThat(h.groups).isEmpty()
+            assertThat(h.grouper.pending()).isZero()
+        }
+
+    @Test
+    fun `cannot take back what already went out`() =
+        runTest {
+            val h = Harness(this)
+            h.grouper.add(signal("AAPL"))
+            h.elapse()
+
+            assertThat(h.grouper.withdraw { it.code == "AAPL" }).isFalse()
+        }
 }

@@ -71,6 +71,24 @@ class Grouper(
 
     fun pending(): Int = waiting.values.sumOf { it.size }
 
+    /**
+     * Takes back waiting signals that [matches], before anyone was told. For a
+     * condition that cleared inside the wait: sending it and its all-clear
+     * back to back tells the reader nothing but that both happened. Returns
+     * whether anything was taken back.
+     */
+    fun withdraw(matches: (Signal) -> Boolean): Boolean {
+        var withdrew = false
+        for ((key, signals) in waiting.entries.toList()) {
+            withdrew = signals.removeAll(matches) || withdrew
+            if (signals.isEmpty()) {
+                timers.remove(key)?.cancel()
+                waiting -= key
+            }
+        }
+        return withdrew
+    }
+
     private fun release(key: String) {
         timers -= key
         val signals = waiting.remove(key)

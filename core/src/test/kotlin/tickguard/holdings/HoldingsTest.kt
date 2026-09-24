@@ -2,6 +2,7 @@ package tickguard.holdings
 
 import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
@@ -51,9 +52,80 @@ class HoldingsTest {
 
     @ParameterizedTest
     @ValueSource(strings = ["\"nope\"", "{}", """{"result":{"items":"nope"}}"""])
-    fun `returns nothing for a body that is not the holdings shape`(body: String) {
-        assertThat(parse(body).positions).isEmpty()
+    fun `refuses a body that is not the holdings shape, rather than reading it as nothing held`(body: String) {
+        assertThatThrownBy { parse(body) }.isInstanceOf(HoldingsFormatError::class.java)
     }
+
+    @Test
+    fun `keeps the positions through one unreadable body`() =
+        runTest {
+            val changes = mutableListOf<Any>()
+            val store =
+                HoldingsStore(StubRest(live, "{}"), onChange = {
+                    added,
+                    removed,
+                    ->
+                    changes += added to removed
+                })
+
+            store.refresh()
+            changes.clear()
+            store.refresh()
+
+            assertThat(store.current().positions).hasSize(2)
+            assertThat(changes).isEmpty()
+            assertThat(store.stats().failures).isEqualTo(1)
+        }
+
+    @Test
+    fun `believes an empty portfolio only when a second answer agrees`() =
+        runTest {
+            val changes = mutableListOf<Pair<List<String>, List<String>>>()
+            val empty = """{"result":{"items":[]}}"""
+            val store =
+                HoldingsStore(StubRest(live, empty, empty), onChange = {
+                    added,
+                    removed,
+                    ->
+                    changes += added to removed
+                })
+
+            store.refresh()
+            changes.clear()
+            store.refresh()
+            // One empty answer is what a backend mid-deploy returns; nothing is unsubscribed yet.
+            assertThat(store.current().positions).hasSize(2)
+            assertThat(changes).isEmpty()
+
+            store.refresh()
+            assertThat(store.current().positions).isEmpty()
+            assertThat(changes).containsExactly(emptyList<String>() to listOf("QQQM", "005930"))
+            assertThat(store.stats().unconfirmedEmpty).isEqualTo(1)
+        }
+
+    @Test
+    fun `forgets a lone empty answer once positions come back`() =
+        runTest {
+            val empty = """{"result":{"items":[]}}"""
+            val store = HoldingsStore(StubRest(live, empty, live, empty))
+
+            repeat(4) { store.refresh() }
+
+            // The empty answers were not consecutive, so neither was believed.
+            assertThat(store.current().positions).hasSize(2)
+            assertThat(store.stats().unconfirmedEmpty).isEqualTo(2)
+        }
+
+    @Test
+    fun `accepts an empty portfolio at once when nothing was held before`() =
+        runTest {
+            val store = HoldingsStore(StubRest("""{"result":{"items":[]}}"""))
+
+            store.refresh()
+
+            assertThat(store.stats().refreshes).isEqualTo(1)
+            assertThat(store.stats().unconfirmedEmpty).isZero()
+        }
 
     @Test
     fun `reports what was bought and what was sold`() =

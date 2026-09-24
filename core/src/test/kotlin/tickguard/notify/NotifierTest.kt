@@ -7,7 +7,9 @@ import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class NotifierTest {
     private val notification = Notification("drawdown-7pct", "[09:14:00] 005930 평단 대비 -7.2%")
@@ -51,6 +53,65 @@ class NotifierTest {
             assertThat(notifier.stats().pending).isEqualTo(1)
             assertThat(notifier.stats().delivered).isZero()
             release.complete(Unit)
+        }
+
+    /** Refuses every send the same way, recording when each attempt came. */
+    private class Refusing(
+        private val scope: TestScope,
+        private val refusal: Exception,
+    ) : Channel {
+        override val name = "refusing"
+        val attemptsAt = mutableListOf<Long>()
+
+        override suspend fun send(notification: Notification) {
+            attemptsAt += scope.testScheduler.currentTime
+            throw refusal
+        }
+    }
+
+    private class Refusal(
+        override val retryable: Boolean,
+        override val retryAfter: Duration? = null,
+    ) : Exception("refused"),
+        DeliveryFailure
+
+    @Test
+    fun `gives up at once on a refusal that a retry would meet again`() =
+        runTest {
+            val gaveUp = mutableListOf<String>()
+            val channel = Refusing(this, Refusal(retryable = false))
+            val notifier = notifier(channel, onGaveUp = { _, name, _ -> gaveUp += name })
+
+            notifier.notify(notification)
+            notifier.drain()
+
+            assertThat(channel.attemptsAt).hasSize(1)
+            assertThat(gaveUp).containsExactly("refusing")
+            assertThat(notifier.stats().retried).isZero()
+        }
+
+    @Test
+    fun `waits as long as a rate limit asks before trying again`() =
+        runTest {
+            val channel = Refusing(this, Refusal(retryable = true, retryAfter = 7.seconds))
+            val notifier = notifier(channel, maxAttempts = 2)
+
+            notifier.notify(notification)
+            notifier.drain()
+
+            assertThat(channel.attemptsAt).containsExactly(0L, 7_000L)
+        }
+
+    @Test
+    fun `caps a Retry-After too long for an alert to still be worth sending`() =
+        runTest {
+            val channel = Refusing(this, Refusal(retryable = true, retryAfter = 1.hours))
+            val notifier = notifier(channel, maxAttempts = 2)
+
+            notifier.notify(notification)
+            notifier.drain()
+
+            assertThat(channel.attemptsAt).containsExactly(0L, 60_000L)
         }
 
     @Test

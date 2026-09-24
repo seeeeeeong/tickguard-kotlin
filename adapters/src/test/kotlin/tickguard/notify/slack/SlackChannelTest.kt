@@ -16,6 +16,7 @@ import tickguard.testing.failureOf
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class SlackChannelTest {
     private val server = MockWebServer()
@@ -49,7 +50,7 @@ class SlackChannelTest {
         }
 
     @Test
-    fun `reports a refusal with its status, so the notifier can retry it`() =
+    fun `reports a refusal with its status, and a gone webhook as not worth retrying`() =
         runTest {
             server.enqueue(
                 MockResponse
@@ -67,6 +68,24 @@ class SlackChannelTest {
                 SlackDeliveryError::class.java,
             ).hasMessageContaining("404")
                 .hasMessageContaining("no_service")
+            assertThat((failure as SlackDeliveryError).retryable).isFalse()
+        }
+
+    @Test
+    fun `passes on how long a rate limit asks to wait`() =
+        runTest {
+            server.enqueue(
+                MockResponse
+                    .Builder()
+                    .code(429)
+                    .addHeader("Retry-After", "7")
+                    .build(),
+            )
+
+            val failure = failureOf { channel().send(notification) } as SlackDeliveryError
+
+            assertThat(failure.retryable).isTrue()
+            assertThat(failure.retryAfter).isEqualTo(7.seconds)
         }
 
     @Test

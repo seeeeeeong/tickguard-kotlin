@@ -52,6 +52,8 @@ import tickguard.stream.Trade
 import tickguard.stream.decodeTrade
 import tickguard.subscribe.SubscriptionCoordinator
 import tickguard.subscribe.Topic
+import tickguard.subscribe.TopicSource
+import tickguard.subscribe.TopicSources
 import tickguard.text.toFixed
 import tickguard.toss.auth.TossAuthClient
 import tickguard.toss.gateway.OkHttpSocketFactory
@@ -134,6 +136,7 @@ class Tickguard(
             store,
             onStoreError = { log.error("rejection not stored: {}", reasonOf(it)) },
         )
+    private val topicSources = TopicSources()
     internal val calendar = Calendar(rest)
     private val windows = WindowStore()
     internal val inbox =
@@ -321,7 +324,7 @@ class Tickguard(
         val loaded = untilLoaded("calendars") { tasks.loadCalendars() } && untilLoaded("holdings", ::loadHoldings)
         if (!loaded) return
 
-        watchExtraSymbols()
+        watch(topicSources.add(TopicSource.EXTRA, config.extraSymbols))
         if (config.secContact == null) log.info("news: SEC filings off — set TICKGUARD_SEC_CONTACT to collect them")
         startup = "ready"
     }
@@ -432,10 +435,8 @@ class Tickguard(
         val markets = holdings.current().markets
         val toTopic = { code: String -> Topic(markets[code] ?: "trade:us", code) }
 
-        if (added.isNotEmpty()) topics.add(added.map(toTopic))
-        if (removed.isNotEmpty()) topics.remove(removed.map(toTopic))
-        added.forEach { sla.expect(it, marketOf(markets[it])) }
-        removed.forEach { sla.forget(it) }
+        watch(topicSources.add(TopicSource.HOLDINGS, added.map(toTopic)))
+        unwatch(topicSources.remove(TopicSource.HOLDINGS, removed.map(toTopic)))
         log.info(
             "holdings: +{} -{}",
             added.joinToString(",").ifEmpty { "-" },
@@ -443,10 +444,16 @@ class Tickguard(
         )
     }
 
-    private fun watchExtraSymbols() {
-        if (config.extraSymbols.isEmpty()) return
-        topics.add(config.extraSymbols)
-        config.extraSymbols.forEach { sla.expect(it.code, marketOf(it.type)) }
+    private fun watch(fresh: List<Topic>) {
+        if (fresh.isEmpty()) return
+        topics.add(fresh)
+        fresh.forEach { sla.expect(it.code, marketOf(it.type)) }
+    }
+
+    private fun unwatch(unwanted: List<Topic>) {
+        if (unwanted.isEmpty()) return
+        topics.remove(unwanted)
+        unwanted.forEach { sla.forget(it.code) }
     }
 
     /** Retries one startup step, keeping the status page's startup line current. */

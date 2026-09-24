@@ -12,13 +12,14 @@ class WatcherTest {
     private var now = 0L
     private var open = true
     private val incidents = mutableListOf<Incident>()
+    private var holdBack = false
     private val recoveries = mutableListOf<Pair<String, Duration>>()
 
     private fun watcher(isOpen: (Market, Instant) -> Boolean = { _, _ -> open }) =
         SlaWatcher(
             isOpen = isOpen,
             clock = InstantSource { Instant.ofEpochMilli(now) },
-            onIncident = { incidents += it },
+            onIncident = { incident -> !holdBack && incidents.add(incident) },
             onRecovered = { code, silent -> recoveries += code to silent },
         )
 
@@ -79,6 +80,22 @@ class WatcherTest {
         watcher.check()
 
         assertThat(incidents).hasSize(1)
+    }
+
+    @Test
+    fun `offers a held-back silence again at the next check, so it is heard once the cause clears`() {
+        val watcher = watcher()
+        watcher.observed("005930", Market.KR)
+        holdBack = true
+
+        advance(11.minutes)
+        watcher.check()
+        assertThat(incidents).isEmpty()
+
+        holdBack = false
+        advance(1.minutes)
+        watcher.check()
+        assertThat(incidents.single().silentFor).isEqualTo(12.minutes)
     }
 
     @Test

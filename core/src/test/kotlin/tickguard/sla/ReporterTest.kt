@@ -37,6 +37,28 @@ class ReporterTest {
     }
 
     @Test
+    fun `pages a feed still silent once the block lifts`() {
+        blocked = true
+        assertThat(reporter.incident(incident("AMZN"))).isFalse()
+        blocked = false
+
+        assertThat(reporter.incident(incident("AMZN"))).isTrue()
+        reporter.recovered("AMZN", 20.minutes)
+
+        assertThat(sent.map { it.ruleId }).containsExactly("sla-silence", "sla-recovered")
+    }
+
+    @Test
+    fun `counts a held-back outage once, however many checks offer it`() {
+        blocked = true
+        repeat(5) { reporter.incident(incident("AMZN")) }
+        reporter.incident(Incident("AMZN", Market.US, 3.minutes, Instant.ofEpochSecond(3_600)))
+
+        // The last one began at a different time: a second outage.
+        assertThat(reporter.stats().inhibited).isEqualTo(2)
+    }
+
+    @Test
     fun `pages each recovery once`() {
         reporter.incident(incident("AMZN"))
 

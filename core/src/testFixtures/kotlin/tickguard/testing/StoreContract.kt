@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -104,6 +105,25 @@ abstract class StoreContract {
             h.store.markDelivered("k", at(1_000))
 
             assertThat(h.store.firesSince(at(0))).isEmpty()
+        }
+
+    @Test
+    fun `applies cooldown writes in the order they were made, even when made without waiting`() =
+        contract { h ->
+            // The rule engine writes behind: a fire and, once its alert is out, the
+            // mark are launched and not awaited. A store that ran the mark first
+            // would mark nothing, and the cooldown would not survive a restart.
+            val writes = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            repeat(FIRES) { i ->
+                val signal = signal(1_000L + i)
+                writes.launch { h.store.recordFire("k$i", signal) }
+                writes.launch { h.store.markDelivered("k$i", signal.firedAt) }
+            }
+            writes.coroutineContext.job.children
+                .toList()
+                .joinAll()
+
+            assertThat(h.store.firesSince(at(0))).hasSize(FIRES)
         }
 
     @Test
@@ -505,4 +525,9 @@ abstract class StoreContract {
 
             assertThat(h.store.openOrders().map { it.orderId }).containsExactly("early", "late")
         }
+
+    private companion object {
+        /** Enough pairs that a store running them out of order is caught every time. */
+        const val FIRES = 50
+    }
 }

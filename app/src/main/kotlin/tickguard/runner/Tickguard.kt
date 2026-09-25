@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import tickguard.auth.TokenManager
+import tickguard.execution.Executor
 import tickguard.fallback.FallbackSymbol
 import tickguard.fallback.RestQuoteFallback
 import tickguard.gateway.ServerFrame
@@ -60,6 +61,7 @@ import tickguard.subscribe.TopicSources
 import tickguard.text.toFixed
 import tickguard.time.SEOUL
 import tickguard.toss.auth.TossAuthClient
+import tickguard.toss.execution.TossOrderPlacer
 import tickguard.toss.gateway.OkHttpSocketFactory
 import tickguard.toss.rest.OkHttpRestClient
 import tickguard.trading.TestSleeves
@@ -288,7 +290,18 @@ class Tickguard(
 
     internal val orders = OrderFeed(counters, store, rest, clock, ::report)
 
-    internal val sleeves = SleeveDesk(store, rest, clock, ::report)
+    /** The one way an order leaves the process, sharing the REST client's token and rate limiter. */
+    private val placer =
+        TossOrderPlacer(
+            http = http,
+            getToken = tokens::token,
+            invalidateToken = tokens::invalidate,
+            accountSeq = config.accountSeq,
+            limiter = rest.limiter,
+            baseUrl = endpoints.rest.toHttpUrl(),
+        )
+
+    internal val sleeves = SleeveDesk(store, rest, clock, ::report, config.trading, Executor(placer, store), calendar)
 
     private var loggedRecordFailure = false
 

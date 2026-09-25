@@ -3,6 +3,8 @@ package tickguard.runner
 import tickguard.auth.TossCredentials
 import tickguard.auth.loadCredentials
 import tickguard.subscribe.Topic
+import tickguard.trading.SleeveMode
+import tickguard.trading.TestSleeves
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -58,6 +60,16 @@ data class Intervals(
     val bars: Duration,
 )
 
+/**
+ * Whether orders may leave the process, and for which sleeves. Everything is
+ * off unless the user turns it on: the kill switch defaults to off and every
+ * sleeve to OFF.
+ */
+data class TradingConfig(
+    val enabled: Boolean,
+    val modes: Map<String, SleeveMode>,
+)
+
 data class FallbackConfig(
     /** REST stands in for the stream after this much silence, polling at [interval]. */
     val silence: Duration,
@@ -97,6 +109,7 @@ data class Config(
     val intervals: Intervals,
     val slaThreshold: Duration,
     val fallback: FallbackConfig,
+    val trading: TradingConfig,
     /** Ticks older than this are pruned. Bounds how far back a backtest can see. */
     val tickRetention: Duration,
     val store: StoreConfig,
@@ -161,6 +174,7 @@ fun loadConfig(env: (String) -> String?): Config {
                 // Three symbols in one call every ten seconds, against a group allowed 15/s.
                 interval = read.duration("TICKGUARD_FALLBACK_INTERVAL_MS", 10.seconds),
             ),
+        trading = tradingConfig(env),
         // Days, unlike every other duration here: 90 days in milliseconds is a
         // ten-digit number nobody can check by eye.
         tickRetention = read.integer("TICKGUARD_TICK_RETENTION_DAYS", DEFAULT_RETENTION_DAYS, minimum = 1).days,
@@ -194,6 +208,24 @@ private fun storeConfig(
         throw ConfigError("TICKGUARD_PG_URL must look like jdbc:postgresql://host:5432/tickguard. Got \"$url\".")
     }
     return StoreConfig.Postgres(url, read.required("TICKGUARD_PG_USER"), read.required("TICKGUARD_PG_PASSWORD"))
+}
+
+/**
+ * `TICKGUARD_TRADING=on` and `TICKGUARD_SLEEVE_A=LIVE`. Anything but an exact
+ * "on" is off, and a mode that is not one of the three is refused at boot:
+ * a typo must not decide whether money moves.
+ */
+private fun tradingConfig(env: (String) -> String?): TradingConfig {
+    val modes =
+        TestSleeves.ALL.associate { sleeve ->
+            val key = "TICKGUARD_SLEEVE_${sleeve.id}"
+            val value = env(key)?.takeIf { it.isNotBlank() }?.trim() ?: "OFF"
+            sleeve.id to (
+                SleeveMode.entries.firstOrNull { it.name == value }
+                    ?: throw ConfigError("$key must be OFF, DRY_RUN or LIVE. Got \"$value\".")
+            )
+        }
+    return TradingConfig(enabled = env("TICKGUARD_TRADING")?.trim() == "on", modes = modes)
 }
 
 /**

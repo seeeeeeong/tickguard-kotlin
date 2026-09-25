@@ -25,7 +25,11 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import tickguard.store.sqlite.SqliteStore
+import tickguard.stream.Decimal
+import tickguard.time.SEOUL
+import tickguard.trading.Bar
 import java.nio.file.Files
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
@@ -44,6 +48,9 @@ import kotlin.time.Duration.Companion.seconds
 class TickguardTest {
     private val server = MockWebServer()
     private val declarations = CopyOnWriteArrayList<String>()
+
+    /** Bodies of every order the app placed against the fake. */
+    private val orderPosts = CopyOnWriteArrayList<String>()
     private val later = Executors.newSingleThreadScheduledExecutor()
     private val engine = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -61,9 +68,13 @@ class TickguardTest {
 
     private fun seoul(hoursFromNow: Long) = OffsetDateTime.now(ZoneOffset.ofHours(9)).plusHours(hoursFromNow).toString()
 
-    /** Open for an hour either side of now, so the SLA watcher counts the market open. */
+    /**
+     * Open from an hour ago to three hours from now: the SLA watcher counts the
+     * market open, and the order window (ten minutes after the open to an hour
+     * before the close) is open too.
+     */
     private fun calendar() =
-        """{"result":{"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(1)}"}}}}"""
+        """{"result":{"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(3)}"}}}}"""
 
     /** One fresh headline about AAPL, published ten minutes ago. */
     private fun feed() =
@@ -121,8 +132,17 @@ class TickguardTest {
                     )
                 }
 
+                path == "/api/v1/orders" && request.method == "POST" -> {
+                    orderPosts += request.body!!.utf8()
+                    json("""{"result":{"orderId":"placed-${orderPosts.size}"}}""")
+                }
+
                 path == "/api/v1/orders" -> {
                     json("""{"result":{"orders":[],"nextCursor":null,"hasNext":false}}""")
+                }
+
+                path == "/api/v1/exchange-rate" -> {
+                    json("""{"result":{"baseCurrency":"USD","quoteCurrency":"KRW","rate":"1368.6"}}""")
                 }
 
                 path == "/api/v1/prices" -> {
@@ -189,6 +209,7 @@ class TickguardTest {
         base: String,
         alerts: MutableList<String>,
         extra: Map<String, String> = emptyMap(),
+        store: SqliteStore = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString()),
     ): Tickguard {
         val env =
             mapOf(
@@ -200,7 +221,7 @@ class TickguardTest {
             ) + extra
         return Tickguard(
             config = loadConfig { env[it] },
-            store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString()),
+            store = store,
             http = OkHttpClient(),
             engine = engine,
             background = background,
@@ -316,6 +337,85 @@ class TickguardTest {
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
                 assertThat(panels["fallback"]).startsWith("REST polling 1 symbols")
 
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    /** Sleeve A's five ETFs, flat at 100 for the last three days: its opening proposal buys each for a fifth. */
+    private suspend fun seedCoreBars(store: SqliteStore) {
+        val yesterday = LocalDate.now(SEOUL).minusDays(1)
+        store.recordBars(
+            listOf("SPY", "QQQ", "TLT", "GLD", "EFA").flatMap { code ->
+                (0L..2L).map { back ->
+                    val hundred = Decimal.HUNDRED
+                    Bar(code, yesterday.minusDays(back), hundred, hundred, hundred, hundred, Decimal.ONE)
+                }
+            },
+        )
+    }
+
+    @Test
+    fun `places a live sleeve's orders in the window, tags them to the sleeve, and says what it did`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_A" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    app.sleeves.propose(force = true)
+                    app.sleeves.execute()
+                    // A second look in the same window places nothing more.
+                    app.sleeves.execute()
+                }
+
+                assertThat(orderPosts).hasSize(5)
+                assertThat(
+                    orderPosts.first(),
+                ).contains("\"orderType\":\"MARKET\"").contains("\"orderAmount\":\"30.68\"")
+                assertThat(orderPosts.map { Regex("tg-\\d{8}-A-B-[A-Z]+").find(it)?.value }).doesNotContainNull()
+                assertThat(store.orderTags()).hasSize(5).allSatisfy { _, sleeve -> assertThat(sleeve).isEqualTo("A") }
+                eventually { alerts.any { "리밸런싱 실행" in it && "✔ A BUY SPY" in it } }
+
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `sends no order at all while the kill switch is off, whatever the sleeves' modes`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_SLEEVE_A" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    app.sleeves.propose(force = true)
+                    app.sleeves.execute()
+                }
+
+                assertThat(orderPosts).isEmpty()
                 withContext(engine.coroutineContext) { app.stop() }
             }
         }

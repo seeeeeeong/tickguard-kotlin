@@ -118,6 +118,25 @@ migration, not a failed disk.
 - **Exit status 143 after a stop is normal.** It is the JVM's answer to SIGTERM, after the
   graceful shutdown has run; `restart: unless-stopped` does not treat it as a crash.
 
+## Automated orders (the three-month sleeve test)
+
+Off unless turned on, sleeve by sleeve, in the server's `.env`:
+
+```bash
+TICKGUARD_TRADING=on            # the kill switch; anything but "on" is off
+TICKGUARD_SLEEVE_A=LIVE         # OFF (default) · DRY_RUN (lists orders, sends none) · LIVE
+TICKGUARD_SLEEVE_B=DRY_RUN
+TICKGUARD_SLEEVE_C=OFF
+```
+
+On the first weekday of a month the service proposes each sleeve's rebalance at 09:00 KST
+(Discord), and places the LIVE sleeves' orders once, in the next US order window: ten
+minutes after the regular open to an hour before the close. Buys go by dollar amount, sells
+by fractional quantity, all at market, each with a client order id so a retry cannot double
+an order. The first order whose outcome is unknown halts everything until a restart; the
+status page's `trading` line says why. The hard limits live in code, not configuration.
+`TICKGUARD_TRADING=off` and `docker compose up -d` stops all orders.
+
 ## Cutting over from the original
 
 The two services share a database schema, so the history moves with the service: recorded

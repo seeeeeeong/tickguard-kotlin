@@ -1,0 +1,17 @@
+# The build runs from source; nothing built or written locally goes in.
+**/build/
+.gradle/
+.kotlin/
+.idea/
+.git/
+docs/
+eval/
+data/
+
+# Never baked into an image: credentials and live data.
+.env
+*.db
+*.db-wal
+*.db-shm
+*.hprof
+*.log

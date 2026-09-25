@@ -24,6 +24,7 @@ class SupervisorTest {
         val opened = mutableListOf<ConnectionHandlers>()
         val attempts = mutableListOf<Long>()
         val onOpen = mutableListOf<Connection>()
+        var onClosed = 0
         val frames = mutableListOf<ServerFrame>()
         val gaveUp = mutableListOf<Throwable>()
         val blocked = mutableListOf<Throwable>()
@@ -53,6 +54,7 @@ class SupervisorTest {
                         }
                     },
                     onOpen = { onOpen += it },
+                    onClosed = { onClosed += 1 },
                     onFrame = { frames += it },
                     onGaveUp = { gaveUp += it },
                     onBlocked = { blocked += it },
@@ -104,6 +106,20 @@ class SupervisorTest {
             h.closeAndMeasure(0)
 
             assertThat(h.onOpen).hasSize(2)
+            h.supervisor.stop()
+        }
+
+    @Test
+    fun `reports a close before waiting to reconnect, so nothing reads a dead socket as up`() =
+        runTest {
+            val h = Harness(this)
+            assertThat(h.onClosed).isZero()
+
+            h.opened[0].onClosed(ConnectionClosed(1006))
+            runCurrent()
+
+            assertThat(h.onClosed).isEqualTo(1)
+            assertThat(h.opened).hasSize(1)
             h.supervisor.stop()
         }
 

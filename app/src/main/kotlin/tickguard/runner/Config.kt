@@ -54,6 +54,8 @@ data class Intervals(
     val reconcile: Duration,
     val prune: Duration,
     val news: Duration,
+    /** Daily bars for the sleeves' signals. The bars change once a day; this is how soon a new one lands. */
+    val bars: Duration,
 )
 
 data class FallbackConfig(
@@ -150,6 +152,7 @@ fun loadConfig(env: (String) -> String?): Config {
                 reconcile = read.duration("TICKGUARD_RECONCILE_INTERVAL_MS", 5.minutes),
                 prune = read.duration("TICKGUARD_PRUNE_INTERVAL_MS", 60.minutes),
                 news = read.duration("TICKGUARD_NEWS_INTERVAL_MS", 5.minutes),
+                bars = read.duration("TICKGUARD_BARS_INTERVAL_MS", 6.hours),
             ),
         slaThreshold = read.duration("TICKGUARD_SLA_THRESHOLD_MS", 10.minutes),
         fallback =

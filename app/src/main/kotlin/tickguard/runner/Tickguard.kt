@@ -58,9 +58,12 @@ import tickguard.subscribe.Topic
 import tickguard.subscribe.TopicSource
 import tickguard.subscribe.TopicSources
 import tickguard.text.toFixed
+import tickguard.time.SEOUL
 import tickguard.toss.auth.TossAuthClient
 import tickguard.toss.gateway.OkHttpSocketFactory
 import tickguard.toss.rest.OkHttpRestClient
+import tickguard.trading.TestSleeves
+import tickguard.trading.refreshBars
 import tickguard.verdict.Direction
 import tickguard.verdict.Verdict
 import tickguard.verdict.VerdictWorker
@@ -68,6 +71,7 @@ import tickguard.verdict.deepseek.DeepSeekJudge
 import java.time.Duration
 import java.time.Instant
 import java.time.InstantSource
+import java.time.LocalDate
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.toJavaDuration
 
@@ -406,6 +410,24 @@ class Tickguard(
             store.pruneVerdicts(history)
         }
 
+        /**
+         * The test sleeves' recent daily bars, fetched with the service's own
+         * token: a separate tool would issue a second token and revoke this one.
+         */
+        suspend fun refreshBars() {
+            val codes = TestSleeves.ALL.flatMap { it.universe }.distinct()
+            val from = LocalDate.now(clock.withZone(SEOUL)).minusDays(BAR_OVERLAP_DAYS)
+            val refreshed = refreshBars(rest, store, codes, from)
+            if (refreshed.unreadable.isNotEmpty()) {
+                log.error(
+                    "bars: {} unreadable: {}",
+                    refreshed.unreadable.size,
+                    refreshed.unreadable,
+                )
+            }
+            log.info("bars: {} written for {} symbols", refreshed.written, codes.size)
+        }
+
         /** Refreshes what the status page and the metrics read from other threads. */
         suspend fun publishSnapshot() {
             snapshot = Snapshot.of(this@Tickguard)
@@ -521,6 +543,9 @@ class Tickguard(
 
     private companion object {
         val log: Logger = LoggerFactory.getLogger(Tickguard::class.java)
+
+        /** Days of bars re-fetched each time: a long weekend, and room for a late adjustment. */
+        const val BAR_OVERLAP_DAYS = 10L
 
         /** The account's order events; the code is the accountSeq. */
         const val ORDER_TOPIC_TYPE = "personal:order"

@@ -27,6 +27,7 @@ import tickguard.notify.Channel
 import tickguard.notify.ConsoleChannel
 import tickguard.notify.Grouper
 import tickguard.notify.Notifier
+import tickguard.notify.discord.DiscordChannel
 import tickguard.notify.slack.SlackChannel
 import tickguard.notify.toNotification
 import tickguard.pipeline.Inbox
@@ -157,6 +158,7 @@ class Tickguard(
                 listOfNotNull<Channel>(
                     ConsoleChannel(alerts),
                     config.slackWebhookUrl?.let { SlackChannel(it, http) },
+                    config.discordWebhookUrl?.let { DiscordChannel(it, http) },
                 ),
             scope = engine,
             // A rule's cooldown holds only once its alert reached someone; an

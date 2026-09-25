@@ -39,6 +39,9 @@ internal class LinkState {
     @Volatile var refusedIp: String? = null
 
     @Volatile var publicIp: String = "확인 전"
+
+    /** When the current socket opened; null while there is none. The process being up says nothing about this. */
+    @Volatile var connectedSince: Instant? = null
 }
 
 /** How the stream reaches Toss, and how it learns our address when refused. */
@@ -79,8 +82,10 @@ internal class StreamLink(
                     },
                     onOpen = { connection ->
                         app.counters.opens.incrementAndGet()
+                        app.link.connectedSince = clock.instant()
                         app.topics.attach(connection::send)
                     },
+                    onClosed = { app.link.connectedSince = null },
                     onFrame = ::onFrame,
                     onBlocked = { onBlocked() },
                     onUnblocked = ::onUnblocked,

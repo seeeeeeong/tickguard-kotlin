@@ -227,8 +227,13 @@ class TickguardTest {
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
                 assertThat(panels).containsEntry("startup", "ready").containsEntry("subscribed", "1 topics")
                 assertThat(panels["recorded"]).matches("[2-9]\\d* · 0 failed · 0 dropped")
+                assertThat(panels["stream"]).startsWith("connected ")
+                assertThat(panels["process"]).startsWith("up ")
+                assertThat(panels["sla watching"]).matches("1 · [01] in session")
 
                 withContext(engine.coroutineContext) { app.stop() }
+                val stopped = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
+                assertThat(stopped["stream"]).isEqualTo("down · reconnecting")
             }
         }
 

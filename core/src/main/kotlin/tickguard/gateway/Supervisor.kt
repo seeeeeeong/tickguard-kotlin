@@ -57,6 +57,8 @@ class SupervisorOptions(
     val connect: suspend (accessToken: String, handlers: ConnectionHandlers) -> Connection,
     /** Fires on every successful connection, on the supervisor's scope. Declare subscriptions here. */
     val onOpen: (Connection) -> Unit,
+    /** Fires when a connection that opened has closed, before the wait to reconnect. */
+    val onClosed: () -> Unit = {},
     /** Called on the socket's reader thread, for the current connection's frames only. Hand them on; do no work. */
     val onFrame: (ServerFrame) -> Unit,
     /** Terminal: the failure will repeat until configuration changes. No further attempts. */
@@ -164,6 +166,7 @@ class Supervisor internal constructor(
         } finally {
             current = null
             if (!closed.isCompleted) connection.close()
+            options.onClosed()
         }
 
         // Only a connection that lasted resets the backoff. Without this, a server

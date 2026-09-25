@@ -19,10 +19,12 @@ internal fun statusPanels(
     val ticks = app.counters.ticks.get()
     val decodeDropped = app.counters.decodeDropped.get()
     val blockedSince = app.link.blockedSince
+    val connectedSince = app.link.connectedSince
     val waitMs = app.pump.maxWait().inWholeMilliseconds
     return listOf(
         StatusPanel("startup", app.startup, ok = app.startup == "ready"),
-        StatusPanel("stream", uptime(app.startedAt, now), ok = opens > 0),
+        StatusPanel("process", uptime(app.startedAt, now)),
+        streamPanel(connectedSince, blockedSince, now),
         StatusPanel(
             "network",
             if (blockedSince == null) {
@@ -63,9 +65,28 @@ internal fun statusPanels(
         newsPanel(app, s, now),
         verdictPanel(s),
         StatusPanel("notify failed", "${app.notifier.stats().abandoned}", ok = app.notifier.stats().abandoned == 0),
-        StatusPanel("sla watching", "${s.sla.watched} (${s.sla.open} open)"),
+        // Symbols whose market is in session, not open incidents, which "(3 open)" read as.
+        StatusPanel("sla watching", "${s.sla.watched} · ${s.sla.open} in session"),
     )
 }
+
+/**
+ * The socket, not the process. This used to show the process's uptime, which
+ * read "up 13m" while Toss refused our address and no socket had ever opened.
+ */
+internal fun streamPanel(
+    connectedSince: Instant?,
+    blockedSince: Instant?,
+    now: Instant,
+) = StatusPanel(
+    "stream",
+    when {
+        connectedSince != null -> "connected ${age(connectedSince, now)}"
+        blockedSince != null -> "down · IP blocked"
+        else -> "down · reconnecting"
+    },
+    ok = connectedSince != null,
+)
 
 private fun fallbackPanel(
     app: Tickguard,
@@ -232,14 +253,20 @@ private fun registerNewsMetrics(
 internal fun uptime(
     since: Instant,
     now: Instant,
+): String = "up ${age(since, now)}"
+
+/** `42s`, `13m`, `5h`, `2d 3h`: coarse on purpose, for a page read at a glance. */
+internal fun age(
+    since: Instant,
+    now: Instant,
 ): String {
     val seconds = Math.round((now.toEpochMilli() - since.toEpochMilli()) / MILLIS_PER_SECOND)
     val hours = seconds / SECONDS_PER_HOUR
     return when {
-        seconds < SECONDS_PER_MINUTE -> "up ${seconds}s"
-        seconds < SECONDS_PER_HOUR -> "up ${seconds / SECONDS_PER_MINUTE}m"
-        hours < HOURS_PER_DAY -> "up ${hours}h"
-        else -> "up ${hours / HOURS_PER_DAY}d ${hours % HOURS_PER_DAY}h"
+        seconds < SECONDS_PER_MINUTE -> "${seconds}s"
+        seconds < SECONDS_PER_HOUR -> "${seconds / SECONDS_PER_MINUTE}m"
+        hours < HOURS_PER_DAY -> "${hours}h"
+        else -> "${hours / HOURS_PER_DAY}d ${hours % HOURS_PER_DAY}h"
     }
 }
 

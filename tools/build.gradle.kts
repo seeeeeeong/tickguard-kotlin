@@ -10,6 +10,10 @@ dependencies {
     implementation(project(":adapters"))
     // The verdict tools read the service's database directly, read-only.
     implementation(libs.sqlite.jdbc)
+    // The migration compares row counts on both sides over plain JDBC.
+    implementation(libs.postgresql)
+
+    testImplementation(libs.testcontainers.postgresql)
 }
 
 tasks.register<JavaExec>("probe") {
@@ -50,5 +54,13 @@ tasks.register<JavaExec>("parity") {
     description = "Compares the Kotlin replay of a database with the original's golden, byte for byte."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("tickguard.tools.ParityKt")
+    workingDir = rootDir
+}
+
+tasks.register<JavaExec>("migrateToPostgres") {
+    group = "tickguard"
+    description = "Copies a SQLite database into an empty Postgres schema and compares row counts."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.MigrateToPostgresKt")
     workingDir = rootDir
 }

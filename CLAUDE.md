@@ -1,7 +1,8 @@
 # tickguard-kotlin
 
 Subscribes to Toss Securities Open API realtime quotes, evaluates compound rules,
-and sends alerts. **Read-only — this project never places orders.**
+and sends alerts. It places orders **only** through `tickguard.execution`, within hard
+limits, for a strategy sleeve a person has switched to `LIVE` (see "Placing orders").
 
 A port of the TypeScript original to Kotlin and Spring Boot. The original is the
 reference for behaviour: parity comes first, proven by replaying recorded ticks through
@@ -9,13 +10,35 @@ both rule engines, and behaviour changes come after it, each in its own pull req
 
 ## Never do this
 
-- **Never call `POST /api/v1/orders`, `/orders/{id}/modify`, `/orders/{id}/cancel`,
-  or any conditional-order endpoint.** These hit a live brokerage account with real money.
-  This repo only *reads*: quotes, orderbook, holdings, and order events.
+- **Never call `/orders/{id}/modify`, `/orders/{id}/cancel`, or any conditional-order
+  endpoint.** These hit a live brokerage account with real money, and nothing here needs them.
+- **Never call `POST /api/v1/orders` from anywhere but `tickguard.execution`**, and never
+  from a Claude session directly — not even a test order. A live test order is sent by the
+  service, switched on by the user, while the user watches.
+- Never raise or bypass an execution hard limit without the user's explicit approval.
+  Configuration may only lower them.
 - Never print `.env` values to logs, commits, or conversation.
 - Never widen the account scope. `X-Tossinvest-Account` is passed through, never guessed.
 - Never run this alongside the TypeScript original against the same client.
   They share one token and two sockets (see below) and will revoke each other.
+
+## Placing orders
+
+Approved by the user on 2026-09-25, for a three-month test with 300,000 won across three
+sleeves (index core, Faber timing, large-cap momentum). Everything below is a requirement,
+not a suggestion; the architecture tests enforce what they can.
+
+| Rule | Why |
+|---|---|
+| Only `POST /api/v1/orders`, only from `tickguard.execution` | One place to review, one place the architecture test allows a request body to an order path |
+| Modes per sleeve: `OFF` / `DRY_RUN` / `LIVE`. `LIVE` is set by the user in configuration | A person decides when money moves; `DRY_RUN` builds and reports orders without sending |
+| Kill switch `TICKGUARD_TRADING=off` stops every order at once | One line to stop everything, without a deploy |
+| Hard limits: total automated capital, per-order value ≤ the sleeve's capital, orders per day, allowlisted symbols per sleeve, `MARKET` orders only; a sell never exceeds what the sleeve holds | A bug should cost at most the test's capital, never more |
+| Buys by `orderAmount` (USD), sells by fractional `quantity` (≤ 6 dp) | The API's rules for US fractional orders |
+| Only on a scheduled rebalance day, from ten minutes after the regular open to one hour before the close | Fractional and amount orders are accepted only then; the first minutes' spreads are wide |
+| Every order carries `clientOrderId` derived from sleeve, date, symbol and side | The key makes a retried request return the first result instead of a second order (valid 10 minutes) |
+| An order whose outcome is unknown halts all automated orders and alerts | An unknown outcome may be a filled order; placing more on top of it is how a bug compounds |
+| Sleeve loss limits: A −25% stops buying, B −20% stops buying, C −30% stops the sleeve for good | Decided before the test, not during a drawdown |
 
 ## Hard constraints of the Toss Securities API
 

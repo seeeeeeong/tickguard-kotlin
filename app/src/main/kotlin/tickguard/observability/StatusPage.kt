@@ -63,7 +63,7 @@ private fun renderPanel(panel: StatusPanel): String {
 }
 
 /** Panel text comes from symbols and error messages, so it is never trusted. */
-private fun escapeHtml(value: String): String =
+internal fun escapeHtml(value: String): String =
     value
         .replace("&", "&amp;")
         .replace("<", "&lt;")

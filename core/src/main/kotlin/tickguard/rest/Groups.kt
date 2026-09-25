@@ -32,6 +32,9 @@ enum class RateLimitGroup(
     MARKET_DATA_CHART(20),
     RANKING(5),
     ORDER_INFO(6, Peak(fromMinute = OPENING_AUCTION_FROM, toMinute = OPENING_AUCTION_TO, perSecond = 3)),
+
+    /** Reading orders back. The groups that place or change orders are deliberately absent. */
+    ORDER_HISTORY(5),
 }
 
 data class Peak(

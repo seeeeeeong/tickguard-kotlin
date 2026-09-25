@@ -16,6 +16,7 @@ import org.springframework.core.env.Environment
 import tickguard.network.reasonOf
 import tickguard.observability.Metrics
 import tickguard.observability.StatusSource
+import tickguard.store.postgres.PostgresStore
 import tickguard.store.sqlite.SqliteStore
 import java.time.Instant
 import java.time.InstantSource
@@ -60,7 +61,11 @@ class TickguardConfiguration {
         val app =
             Tickguard(
                 config = config,
-                store = SqliteStore.open(config.storePath),
+                store =
+                    when (val store = config.store) {
+                        is StoreConfig.Sqlite -> SqliteStore.open(store.path)
+                        is StoreConfig.Postgres -> PostgresStore.open(store.url, store.user, store.password)
+                    },
                 http = http,
                 engine = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1) + failures),
                 background = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures),

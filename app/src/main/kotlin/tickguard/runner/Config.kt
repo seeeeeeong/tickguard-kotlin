@@ -24,6 +24,22 @@ data class RulesConfig(
     val rapidMoveWindow: Duration,
 )
 
+/** Where the state that outlives a restart is kept. */
+sealed interface StoreConfig {
+    /** One file, in-process: the original's store, and the default. */
+    data class Sqlite(
+        val path: String,
+    ) : StoreConfig
+
+    data class Postgres(
+        val url: String,
+        val user: String,
+        val password: String,
+    ) : StoreConfig {
+        override fun toString() = "Postgres(url=$url, user=$user, password=***)"
+    }
+}
+
 data class LlmConfig(
     val apiKey: String?,
     val model: String,
@@ -81,7 +97,7 @@ data class Config(
     val fallback: FallbackConfig,
     /** Ticks older than this are pruned. Bounds how far back a backtest can see. */
     val tickRetention: Duration,
-    val storePath: String,
+    val store: StoreConfig,
     val metricsPort: Int,
 ) {
     override fun toString() = "Config(accountSeq=$accountSeq, extraSymbols=$extraSymbols, rules=$rules, llm=$llm, …)"
@@ -145,7 +161,7 @@ fun loadConfig(env: (String) -> String?): Config {
         // Days, unlike every other duration here: 90 days in milliseconds is a
         // ten-digit number nobody can check by eye.
         tickRetention = read.integer("TICKGUARD_TICK_RETENTION_DAYS", DEFAULT_RETENTION_DAYS, minimum = 1).days,
-        storePath = env("TICKGUARD_DB") ?: "tickguard.db",
+        store = storeConfig(read, env),
         metricsPort = read.integer("TICKGUARD_METRICS_PORT", DEFAULT_METRICS_PORT),
     )
 }
@@ -158,6 +174,24 @@ private const val DEFAULT_RETENTION_DAYS = 90
 
 /** The port the original served its status page and metrics on. */
 private const val DEFAULT_METRICS_PORT = 9_464
+
+/**
+ * Postgres when a URL is given, SQLite otherwise. Credentials are required
+ * with a URL rather than defaulted: a guessed user connects to the wrong
+ * database, or to none, at the first write instead of at boot.
+ */
+private fun storeConfig(
+    read: EnvReader,
+    env: (String) -> String?,
+): StoreConfig {
+    val url =
+        env("TICKGUARD_PG_URL")?.takeIf { it.isNotEmpty() }
+            ?: return StoreConfig.Sqlite(env("TICKGUARD_DB") ?: "tickguard.db")
+    if (!url.startsWith("jdbc:postgresql://")) {
+        throw ConfigError("TICKGUARD_PG_URL must look like jdbc:postgresql://host:5432/tickguard. Got \"$url\".")
+    }
+    return StoreConfig.Postgres(url, read.required("TICKGUARD_PG_USER"), read.required("TICKGUARD_PG_PASSWORD"))
+}
 
 /**
  * `NVDA:us,005930:kr`. The market is explicit because a bare ticker does not

@@ -80,6 +80,29 @@ class ConfigTest {
     }
 
     @Test
+    fun `keeps state in SQLite unless given a Postgres URL, and then insists on credentials`() {
+        assertThat(load().store).isEqualTo(StoreConfig.Sqlite("tickguard.db"))
+
+        val postgres =
+            load(
+                "TICKGUARD_PG_URL" to "jdbc:postgresql://db:5432/tickguard",
+                "TICKGUARD_PG_USER" to "tickguard",
+                "TICKGUARD_PG_PASSWORD" to "pg-secret",
+            )
+        assertThat(
+            postgres.store,
+        ).isEqualTo(StoreConfig.Postgres("jdbc:postgresql://db:5432/tickguard", "tickguard", "pg-secret"))
+        assertThat(postgres.store.toString()).doesNotContain("pg-secret")
+
+        assertThatThrownBy { load("TICKGUARD_PG_URL" to "jdbc:postgresql://db:5432/tickguard") }
+            .isInstanceOf(ConfigError::class.java)
+            .hasMessageContaining("TICKGUARD_PG_USER")
+        assertThatThrownBy { load("TICKGUARD_PG_URL" to "postgres://db/tickguard") }
+            .isInstanceOf(ConfigError::class.java)
+            .hasMessageContaining("jdbc:postgresql://")
+    }
+
+    @Test
     fun `treats an empty webhook as absent, not as an empty URL`() {
         assertThat(load("TICKGUARD_SLACK_WEBHOOK" to "").slackWebhookUrl).isNull()
         assertThat(load("TICKGUARD_DISCORD_WEBHOOK" to "").discordWebhookUrl).isNull()

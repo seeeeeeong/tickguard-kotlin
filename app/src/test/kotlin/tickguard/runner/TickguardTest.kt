@@ -373,12 +373,11 @@ class TickguardTest {
 
                 engine.launch { app.start() }
                 eventually { app.startup == "ready" }
-                withContext(engine.coroutineContext) {
-                    app.sleeves.propose(force = true)
-                    app.sleeves.execute()
-                    // A second look in the same window places nothing more.
-                    app.sleeves.execute()
-                }
+                // As the /sleeves/rebalance route does: propose now, then place in the open window.
+                app.sleeves.requestNow()
+                eventually { orderPosts.size == 5 }
+                // A second look in the same window places nothing more.
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
 
                 assertThat(orderPosts).hasSize(5)
                 assertThat(

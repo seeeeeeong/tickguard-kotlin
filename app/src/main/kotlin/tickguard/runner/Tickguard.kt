@@ -301,7 +301,8 @@ class Tickguard(
             baseUrl = endpoints.rest.toHttpUrl(),
         )
 
-    internal val sleeves = SleeveDesk(store, rest, clock, ::report, config.trading, Executor(placer, store), calendar)
+    internal val sleeves =
+        SleeveDesk(store, rest, clock, ::report, config.trading, Executor(placer, store), calendar, engine)
 
     private var loggedRecordFailure = false
 

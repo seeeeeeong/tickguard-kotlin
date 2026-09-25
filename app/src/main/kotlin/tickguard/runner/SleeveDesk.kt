@@ -1,5 +1,7 @@
 package tickguard.runner
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import tickguard.execution.ExecutionLimits
@@ -44,6 +46,8 @@ internal class SleeveDesk(
     private val trading: TradingConfig,
     private val executor: Executor,
     private val calendar: Calendar,
+    /** The engine: proposals and orders run where the rest of the domain state does. */
+    private val scope: CoroutineScope,
 ) {
     /** The last proposals made, for the execution module and the status page. */
     @Volatile var proposals: List<SleeveProposal> = emptyList()
@@ -53,6 +57,20 @@ internal class SleeveDesk(
     @Volatile private var proposedAt: Instant? = null
 
     @Volatile private var executedFor: Instant? = null
+
+    /**
+     * Proposes now, whatever the day, and places the result if the kill switch
+     * and the order window allow: how the test's opening orders are placed, and
+     * how a person reruns a month by hand. A second request the same day
+     * proposes from the updated ledger, and the day's client order ids make a
+     * repeated order return the first instead of placing another.
+     */
+    fun requestNow() {
+        scope.launch {
+            propose(force = true)
+            execute()
+        }
+    }
 
     /** What the status page shows: off, the modes, or why automated orders halted. */
     fun describe(): String {

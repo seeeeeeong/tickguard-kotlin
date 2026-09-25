@@ -1,0 +1,42 @@
+# One service on one host. The API allows one valid token per client and two
+# sockets per account, so this must never run beside another copy: not a second
+# replica, not the laptop, not the TypeScript original.
+services:
+  tickguard:
+    # Published by CI on every merge to main. `build` is for trying a change
+    # locally; the server only pulls.
+    image: ghcr.io/seeeeeeong/tickguard-kotlin:${TICKGUARD_TAG:-main}
+    build: .
+    # TOSS_* and TICKGUARD_*, as for the original. Never committed.
+    env_file: .env
+    environment:
+      # Fixed here, where they beat env_file: a .env carried over from a laptop
+      # names a database path relative to a checkout, which in the container is
+      # a file lost on every recreate.
+      TICKGUARD_DB: /data/tickguard.db
+      TICKGUARD_METRICS_HOST: 0.0.0.0
+    ports:
+      # Loopback unless told otherwise. On the home server this is the tailnet
+      # address, so the status page is reachable from the tailnet only.
+      - "${TICKGUARD_BIND:-127.0.0.1}:9464:9464"
+    volumes:
+      # A directory rather than a named volume, so the host can back it up
+      # with sqlite3 .backup. Owned by uid 10001, the image's user.
+      - ./data:/data
+    # Not `always`: a stop by hand stays stopped, which is what a deploy to
+    # another machine needs before that one starts.
+    restart: unless-stopped
+    # Spring allows 30s for the drain; this is that plus the JVM's own exit.
+    # The exit status after a stop is 143 (SIGTERM), which is normal for a JVM.
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:9464/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

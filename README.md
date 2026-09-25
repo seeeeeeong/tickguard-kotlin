@@ -77,6 +77,27 @@ These are deliberate. None of them has a fix planned.
 - **Quotes are lossy by design.** The reconciler measures drift against REST. It cannot
   replay what the socket dropped, and nothing can.
 
+## Deploying
+
+CI publishes `ghcr.io/seeeeeeong/tickguard-kotlin` on every merge to main, tagged `main`
+and with the commit. The server only pulls; it never builds.
+
+```bash
+# once: compose.yaml and .env in a directory, data/ owned by the image's user
+mkdir data && chown 10001 data
+echo "TICKGUARD_BIND=<tailnet address>" >> .env    # status page on the tailnet only
+
+docker compose pull && docker compose up -d         # deploy
+TICKGUARD_TAG=<commit> docker compose up -d         # roll back to a commit
+```
+
+- **One copy at a time.** Stop the server's copy (`docker compose stop`) before running
+  one anywhere else, the laptop included. Two copies revoke each other's token.
+- **The source IP must be registered** in WTS. A home connection's address can change;
+  the service then alerts once and retries every minute until it is registered again.
+- **Exit status 143 after a stop is normal.** It is the JVM's answer to SIGTERM, after the
+  graceful shutdown has run; `restart: unless-stopped` does not treat it as a crash.
+
 ## Development
 
 JDK 21 (downloaded by Gradle if missing).

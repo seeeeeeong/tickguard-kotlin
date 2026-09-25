@@ -52,6 +52,11 @@ data class ReconcilerStats(
  * that stays small says the stream is healthy; one that grows and does not
  * come back says frames are being lost.
  *
+ * The stream keeps moving while the REST call is in flight, and the answer
+ * may reflect a trade from either side of it. So the REST price is compared
+ * with the streamed price from before the call and from after it, and the
+ * nearer one counts: agreeing with either is agreeing with the stream.
+ *
  * Symbols with no streamed price are skipped rather than reported. Before the
  * first tick there is nothing to disagree with, and calling that drift would
  * make every startup look like an incident.
@@ -73,13 +78,13 @@ class Reconciler(
 
     @Suppress("TooGenericExceptionCaught") // A failed run is counted; it must never reach the scheduler.
     suspend fun run(): ReconcileReport {
-        val seen = lastSeen()
-        if (seen.isEmpty()) return EMPTY
+        val before = lastSeen().toMap()
+        if (before.isEmpty()) return EMPTY
 
         return try {
-            val fetched = fetchPrices(rest, seen.keys.toList())
+            val fetched = fetchPrices(rest, before.keys.toList())
             runs += 1
-            compare(seen, fetched).also { report ->
+            compare(before, lastSeen(), fetched).also { report ->
                 drifts += report.drifts.size
                 report.drifts.forEach(onDrift)
             }
@@ -95,7 +100,8 @@ class Reconciler(
     fun stats() = ReconcilerStats(runs, failures, drifts)
 
     private fun compare(
-        seen: Map<String, StreamedPrice>,
+        before: Map<String, StreamedPrice>,
+        after: Map<String, StreamedPrice>,
         fetched: Map<String, Decimal>,
     ): ReconcileReport {
         val found = mutableListOf<Drift>()
@@ -104,14 +110,15 @@ class Reconciler(
         var worst = 0.0
         val at = clock.millis()
 
-        for ((code, streamed) in seen) {
+        for ((code, earlier) in before) {
             val reference = fetched[code]
-            if (reference == null || streamed.price.isZero()) {
+            if (reference == null || earlier.price.isZero()) {
                 skipped += 1
                 continue
             }
 
             checked += 1
+            val streamed = nearer(reference, earlier, after[code])
             val ratio = changeRatio(streamed.price, reference)
             worst = maxOf(worst, ratio.abs().toDouble())
             if (ratio.abs() >= tolerance) {
@@ -119,6 +126,18 @@ class Reconciler(
             }
         }
         return ReconcileReport(checked, skipped, found, worst)
+    }
+
+    /** Whichever streamed price the REST answer is closer to. */
+    private fun nearer(
+        reference: Decimal,
+        earlier: StreamedPrice,
+        later: StreamedPrice?,
+    ): StreamedPrice {
+        if (later == null || later.price.isZero()) return earlier
+        val fromEarlier = changeRatio(earlier.price, reference).abs()
+        val fromLater = changeRatio(later.price, reference).abs()
+        return if (fromLater < fromEarlier) later else earlier
     }
 
     private companion object {

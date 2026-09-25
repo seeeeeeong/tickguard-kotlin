@@ -45,7 +45,17 @@ suspend fun main(args: Array<String>) {
     val from = LocalDate.parse(args[1])
     val store = openStore(environment())
     try {
-        val bars = codes.associateWith { store.bars(it, from, LocalDate.now()) }.filterValues { it.isNotEmpty() }
+        // Up to yesterday: today's bar may still be forming (Toss trades US shares
+        // in Korean daytime), and a partial close is not a price anyone decided on.
+        val bars =
+            codes
+                .associateWith {
+                    store.bars(
+                        it,
+                        from,
+                        LocalDate.now().minusDays(1),
+                    )
+                }.filterValues { it.isNotEmpty() }
         println(report(bars, costs, Decimal.of(STARTING_CASH), candidates()))
     } finally {
         withContext(NonCancellable) { store.close() }

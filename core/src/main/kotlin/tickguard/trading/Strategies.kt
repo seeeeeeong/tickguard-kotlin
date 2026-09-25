@@ -4,27 +4,49 @@ import tickguard.stream.Decimal
 
 /**
  * Holds, in equal parts, every symbol whose close is above its moving
- * average, and cash for the rest: the long-standing trend filter. It trades
- * only when a symbol crosses its average, which keeps costs low, and it steps
+ * average, and cash for the rest: the long-standing trend filter. It steps
  * aside in long declines, which is where holding loses most.
+ *
+ * It looks once every [every] trading days, as the rule was published (at
+ * month ends), not daily: a price hovering at its average crosses it again
+ * and again, and each crossing is a trade paid for.
  */
 class TrendFilter(
     private val days: Int = DEFAULT_TREND_DAYS,
+    private val every: Int = DEFAULT_REBALANCE_DAYS,
 ) : Strategy {
-    override val name = "trend-sma$days"
+    override val name = "trend-sma$days-every${every}d"
 
+    private var daysSince = every
+
+    /** Which symbols are above their average, as of the last decision. */
+    private var last: Map<String, Boolean>? = null
+
+    /**
+     * Asks for a change only when a symbol crosses its average. Re-sending the
+     * same equal weights every day made the simulation trade each day's drift
+     * back to exact equality: thousands of small trades, and their costs.
+     */
     override fun targets(history: History): Map<String, Decimal> {
-        val above =
-            history.codes.associateWith { code ->
-                val closes = history.closes(code, days) ?: return@associateWith null
-                closes.last() > average(closes)
-            }
-        // A symbol without enough history yet is left as it is, not sold.
-        val known = above.filterValues { it != null }
-        val holding = known.filterValues { it == true }.keys
-        if (holding.isEmpty()) return known.mapValues { Decimal.ZERO }
-        val weight = Decimal.ONE / Decimal.of(holding.size.toLong())
-        return known.mapValues { (code, _) -> if (code in holding) weight else Decimal.ZERO }
+        daysSince += 1
+        if (daysSince < every) return emptyMap()
+        daysSince = 0
+        val above = aboveAverage(history)
+        return if (above == last) emptyMap() else weights(above).also { last = above }
+    }
+
+    /** A symbol without enough history yet is left out, so it is left as it is rather than sold. */
+    private fun aboveAverage(history: History): Map<String, Boolean> =
+        history.codes
+            .mapNotNull { code ->
+                val closes = history.closes(code, days) ?: return@mapNotNull null
+                code to (closes.last() > average(closes))
+            }.toMap()
+
+    private fun weights(above: Map<String, Boolean>): Map<String, Decimal> {
+        val holding = above.filterValues { it }.keys
+        val weight = if (holding.isEmpty()) Decimal.ZERO else Decimal.ONE / Decimal.of(holding.size.toLong())
+        return above.mapValues { (code, _) -> if (code in holding) weight else Decimal.ZERO }
     }
 }
 

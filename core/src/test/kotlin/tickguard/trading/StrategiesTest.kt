@@ -28,9 +28,28 @@ class StrategiesTest {
     fun `trend filter holds what is above its average and leaves the rest in cash`() {
         val bars = mapOf("UP" to closes("UP", 10, 11, 12, 13), "DOWN" to closes("DOWN", 13, 12, 11, 10))
 
-        val targets = TrendFilter(days = 3).targets(historyOn(bars, 3))
+        val targets = TrendFilter(days = 3, every = 1).targets(historyOn(bars, 3))
 
         assertThat(targets).isEqualTo(mapOf("UP" to Decimal.ONE, "DOWN" to Decimal.ZERO))
+    }
+
+    @Test
+    fun `trend filter asks for nothing while no symbol crosses its average`() {
+        val bars = mapOf("UP" to closes("UP", 10, 11, 12, 13, 14), "DOWN" to closes("DOWN", 13, 12, 11, 10, 9))
+        val strategy = TrendFilter(days = 3, every = 1)
+
+        assertThat(strategy.targets(historyOn(bars, 3))).isNotEmpty()
+        assertThat(strategy.targets(historyOn(bars, 4))).isEmpty()
+    }
+
+    @Test
+    fun `trend filter looks only on its own schedule`() {
+        val bars = mapOf("A" to closes("A", 10, 11, 12, 13, 14, 15, 16))
+        val strategy = TrendFilter(days = 2, every = 3)
+
+        val looked = (1..6).map { strategy.targets(historyOn(bars, it)).isNotEmpty() }
+
+        assertThat(looked).containsExactly(true, false, false, false, false, false)
     }
 
     @Test
@@ -38,7 +57,7 @@ class StrategiesTest {
         val bars = mapOf("OLD" to closes("OLD", 10, 11, 12), "NEW" to closes("NEW", 5, 6))
 
         val targets =
-            TrendFilter(days = 3).targets(
+            TrendFilter(days = 3, every = 1).targets(
                 History(
                     LocalDate.parse("2026-01-07"),
                     bars,
@@ -92,7 +111,7 @@ class StrategiesTest {
         val bars = mapOf("A" to closes("A", *prices.toIntArray()))
         val free = CostModel(Decimal.ZERO, Decimal.ZERO, Decimal.ZERO)
 
-        val trend = simulate(bars, TrendFilter(days = 10), free, decimal("10000")).performance
+        val trend = simulate(bars, TrendFilter(days = 10, every = 1), free, decimal("10000")).performance
         val hold = simulate(bars, BuyAndHold(), free, decimal("10000")).performance
 
         assertThat(trend.maxDrawdown).isLessThan(hold.maxDrawdown / 2)

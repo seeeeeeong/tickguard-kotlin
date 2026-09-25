@@ -38,6 +38,6 @@ class StrategyReportTest {
         assertThat(text).contains("생존 편향")
         assertThat(text.lines().filter { it.startsWith("buy-and-hold") }.map { it.split(Regex("\\s+"))[1] })
             .containsExactly("전체", "전반", "후반")
-        assertThat(text).contains("trend-sma200").contains("momentum-126d-top2")
+        assertThat(text).contains("trend-sma200-every21d").contains("momentum-126d-top2")
     }
 }

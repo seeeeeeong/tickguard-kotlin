@@ -64,3 +64,11 @@ tasks.register<JavaExec>("migrateToPostgres") {
     mainClass.set("tickguard.tools.MigrateToPostgresKt")
     workingDir = rootDir
 }
+
+tasks.register<JavaExec>("backfillBars") {
+    group = "tickguard"
+    description = "Fetches daily bars for backtests into the store. Stop the service first: it issues a token."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.BackfillBarsKt")
+    workingDir = rootDir
+}

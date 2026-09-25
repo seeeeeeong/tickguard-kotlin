@@ -4,6 +4,7 @@ import tickguard.news.NewsStore
 import tickguard.orders.OrderStore
 import tickguard.rules.CooldownStore
 import tickguard.subscribe.RejectionStore
+import tickguard.trading.BarStore
 import tickguard.verdict.VerdictStore
 import java.time.Instant
 
@@ -37,7 +38,8 @@ interface Store :
     TickStore,
     NewsStore,
     VerdictStore,
-    OrderStore {
+    OrderStore,
+    BarStore {
     /** For measuring how often a rule was right, once outcomes are known. Newest first. */
     suspend fun recentSignals(limit: Int): List<StoredSignal>
 

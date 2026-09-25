@@ -115,6 +115,41 @@ class NotifierTest {
         }
 
     @Test
+    fun `settles once, delivered, when every channel delivered`() =
+        runTest {
+            val settled = mutableListOf<Boolean>()
+            val notifier =
+                Notifier(
+                    listOf(Flaky(this, failures = 0, name = "a"), Flaky(this, failures = 1, name = "b")),
+                    backgroundScope,
+                    onSettled = { _, delivered -> settled += delivered },
+                )
+
+            notifier.notify(notification)
+            notifier.drain()
+
+            assertThat(settled).containsExactly(true)
+        }
+
+    @Test
+    fun `settles as not delivered when any channel gave up`() =
+        runTest {
+            val settled = mutableListOf<Boolean>()
+            val notifier =
+                Notifier(
+                    listOf(Flaky(this, failures = 0, name = "console"), Refusing(this, Refusal(retryable = false))),
+                    backgroundScope,
+                    onSettled = { _, delivered -> settled += delivered },
+                )
+
+            notifier.notify(notification)
+            notifier.drain()
+
+            // The channel that gave up may be the only one anybody reads.
+            assertThat(settled).containsExactly(false)
+        }
+
+    @Test
     fun `retries a failing channel before giving up`() =
         runTest {
             val flaky = Flaky(this, failures = 2)

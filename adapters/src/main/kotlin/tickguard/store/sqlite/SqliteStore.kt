@@ -40,7 +40,7 @@ class SqliteStore private constructor(
     private val io: CoroutineDispatcher,
 ) : Store {
     override suspend fun firesSince(since: Instant): Map<String, Instant> =
-        query("SELECT key, fired_at FROM fires WHERE fired_at >= ?", since.toEpochMilli()) {
+        query("SELECT key, fired_at FROM fires WHERE fired_at >= ? AND delivered = 1", since.toEpochMilli()) {
             it.getString("key") to it.instant("fired_at")
         }.toMap(LinkedHashMap())
 
@@ -50,14 +50,21 @@ class SqliteStore private constructor(
     ) {
         update(
             """
-            INSERT INTO fires (key, rule_id, code, fired_at) VALUES (?, ?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET fired_at = excluded.fired_at
+            INSERT INTO fires (key, rule_id, code, fired_at, delivered) VALUES (?, ?, ?, ?, 0)
+            ON CONFLICT(key) DO UPDATE SET fired_at = excluded.fired_at, delivered = 0
             """,
             key,
             signal.ruleId,
             signal.code,
             signal.firedAt.toEpochMilli(),
         )
+    }
+
+    override suspend fun markDelivered(
+        key: String,
+        firedAt: Instant,
+    ) {
+        update("UPDATE fires SET delivered = 1 WHERE key = ? AND fired_at = ?", key, firedAt.toEpochMilli())
     }
 
     override suspend fun pruneFires(olderThan: Instant): Int =
@@ -344,8 +351,26 @@ class SqliteStore private constructor(
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .forEach { sql -> db.createStatement().use { it.execute(sql) } }
+            migrate(db)
             return SqliteStore(db, io)
         }
+    }
+}
+
+/**
+ * Changes made since the port, applied to a file of either origin. `fires.delivered`
+ * defaults to 1, so rows written before it existed, or by the original, keep
+ * suppressing exactly as they did.
+ */
+private fun migrate(db: Connection) {
+    val columns =
+        db.createStatement().use { statement ->
+            statement.executeQuery("PRAGMA table_info(fires)").use { rows ->
+                buildList { while (rows.next()) add(rows.getString("name")) }
+            }
+        }
+    if ("delivered" !in columns) {
+        db.createStatement().use { it.execute("ALTER TABLE fires ADD COLUMN delivered INTEGER NOT NULL DEFAULT 1") }
     }
 }
 

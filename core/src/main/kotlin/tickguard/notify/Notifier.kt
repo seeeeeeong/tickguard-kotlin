@@ -6,7 +6,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import tickguard.rules.Signal
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -21,6 +23,8 @@ data class Notification(
     /** For logs and metrics, not for display. */
     val key: String,
     val text: String,
+    /** What the text was made from, so its delivery can be reported back to where they came from. */
+    val signals: List<Signal> = emptyList(),
 )
 
 interface Channel {
@@ -74,6 +78,12 @@ class Notifier(
     private val baseDelay: Duration = DEFAULT_BASE_DELAY,
     private val onDelivered: (Notification, String) -> Unit = { _, _ -> },
     private val onGaveUp: (Notification, String, Exception) -> Unit = { _, _, _ -> },
+    /**
+     * Once per notification, when every channel has finished: true if all
+     * delivered it. One channel giving up counts as not delivered, since the
+     * channel that gave up may be the only one anybody reads.
+     */
+    private val onSettled: (Notification, delivered: Boolean) -> Unit = { _, _ -> },
 ) {
     private val queued = AtomicInteger()
     private val delivered = AtomicInteger()
@@ -84,7 +94,20 @@ class Notifier(
     /** Returns immediately. Delivery happens off the caller's stack. */
     fun notify(notification: Notification) {
         queued.incrementAndGet()
-        for (channel in channels) track(scope.launch { deliver(channel, notification) })
+        if (channels.isEmpty()) {
+            onSettled(notification, false)
+            return
+        }
+        val remaining = AtomicInteger(channels.size)
+        val allDelivered = AtomicBoolean(true)
+        for (channel in channels) {
+            track(
+                scope.launch {
+                    if (!deliver(channel, notification)) allDelivered.set(false)
+                    if (remaining.decrementAndGet() == 0) onSettled(notification, allDelivered.get())
+                },
+            )
+        }
     }
 
     /** Waits for in-flight deliveries, including any queued while waiting. For shutdown and tests. */
@@ -101,27 +124,28 @@ class Notifier(
             pending = inFlight.size,
         )
 
+    /** True when delivered; false once given up on. */
     private suspend fun deliver(
         channel: Channel,
         notification: Notification,
-    ) {
-        for (attempt in 1..maxAttempts) {
-            val failure = attemptSend(channel, notification)
-            if (failure == null) {
-                delivered.incrementAndGet()
-                onDelivered(notification, channel.name)
-                return
-            }
+    ): Boolean {
+        var attempt = 1
+        while (true) {
+            val failure = attemptSend(channel, notification) ?: break
             val refusal = failure as? DeliveryFailure
-            if (attempt == maxAttempts || refusal?.retryable == false) {
+            if (attempt >= maxAttempts || refusal?.retryable == false) {
                 abandoned.incrementAndGet()
                 onGaveUp(notification, channel.name, failure)
-                return
+                return false
             }
             retried.incrementAndGet()
             val backoff = baseDelay * (1 shl (attempt - 1))
             delay(maxOf(backoff, minOf(refusal?.retryAfter ?: Duration.ZERO, MAX_RETRY_AFTER)))
+            attempt += 1
         }
+        delivered.incrementAndGet()
+        onDelivered(notification, channel.name)
+        return true
     }
 
     /** Returns the failure rather than throwing, so the loop stays flat. */

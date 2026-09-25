@@ -123,4 +123,22 @@ class ReconcilerTest {
             assertThat(reconciler.stats()).isEqualTo(ReconcilerStats(runs = 0, failures = 1, drifts = 0))
             assertThat(errors).hasSize(1)
         }
+
+    @Test
+    fun `counts agreement with the price the stream moved to while the call was in flight`() =
+        runTest {
+            // Streamed 340 before the call and 343.36 by the time it answered 343.36:
+            // the stream moved, it did not lose anything.
+            var calls = 0
+            val reconciler =
+                Reconciler(StubRest(live), {
+                    calls += 1
+                    mapOf("AAPL" to if (calls == 1) streamed("340") else streamed("343.36", 1_000))
+                })
+
+            val report = reconciler.run()
+
+            assertThat(report.checked).isEqualTo(1)
+            assertThat(report.drifts).isEmpty()
+        }
 }

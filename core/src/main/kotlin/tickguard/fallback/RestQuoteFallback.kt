@@ -20,6 +20,8 @@ data class FallbackStats(
     val polls: Int,
     val quotes: Int,
     val failures: Int,
+    /** Prices dropped because the stream delivered something newer while they were fetched. */
+    val stale: Int = 0,
 )
 
 /** Longer than any gap in a healthy stream during a session; far shorter than an outage. */
@@ -40,6 +42,10 @@ val DEFAULT_SILENCE = 30.seconds
  * shares the allow list, and polling into a 403 every ten seconds only
  * fills the log.
  *
+ * A price that comes back after the stream delivered something newer for the
+ * same symbol is dropped: the stream is back for it, and the REST answer is
+ * older than what the rules have already seen.
+ *
  * A REST price is not a trade. It carries no time and no size, so it goes to
  * the rules and nowhere else: not into recorded ticks, which a backtest
  * replays as trades, and not into the SLA watcher, which judges the stream.
@@ -53,6 +59,8 @@ class RestQuoteFallback(
     /** True while polling would only meet the same refusal. */
     private val paused: () -> Boolean,
     private val onQuote: (Trade) -> Unit,
+    /** When the stream last delivered this symbol, if it has. */
+    private val lastStreamedAt: (String) -> Instant? = { null },
     private val onError: (Exception) -> Unit = {},
     /** Silence tolerated before REST steps in. */
     private val silence: Duration = DEFAULT_SILENCE,
@@ -62,6 +70,7 @@ class RestQuoteFallback(
     private var polls = 0
     private var quotes = 0
     private var failures = 0
+    private var stale = 0
 
     /** Called on a timer. Does nothing while the stream is healthy. */
     @Suppress("TooGenericExceptionCaught") // Any failed poll is counted and retried on the next tick.
@@ -73,7 +82,7 @@ class RestQuoteFallback(
 
         polls += 1
         try {
-            emit(open, fetchPrices(open.map { it.code }))
+            emit(open, fetchPrices(open.map { it.code }), requestedAt = at)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -82,25 +91,42 @@ class RestQuoteFallback(
         }
     }
 
-    fun stats() = FallbackStats(active, polls, quotes, failures)
+    fun stats() = FallbackStats(active, polls, quotes, failures, stale)
 
     private fun emit(
         open: List<FallbackSymbol>,
         prices: Map<String, Decimal>,
+        requestedAt: Instant,
     ) {
         for (symbol in open) {
             val price = prices[symbol.code] ?: continue
-            quotes += 1
-            onQuote(
-                Trade(
-                    type = symbol.type,
-                    code = symbol.code,
-                    price = price,
-                    volume = Decimal.ZERO,
-                    at = clock.instant(),
-                    currency = if (symbol.market == Market.KR) "KRW" else "USD",
-                ),
-            )
+            if (overtaken(symbol.code, requestedAt)) {
+                stale += 1
+            } else {
+                quote(symbol, price)
+            }
         }
+    }
+
+    private fun overtaken(
+        code: String,
+        requestedAt: Instant,
+    ): Boolean = lastStreamedAt(code)?.let { it > requestedAt } ?: false
+
+    private fun quote(
+        symbol: FallbackSymbol,
+        price: Decimal,
+    ) {
+        quotes += 1
+        onQuote(
+            Trade(
+                type = symbol.type,
+                code = symbol.code,
+                price = price,
+                volume = Decimal.ZERO,
+                at = clock.instant(),
+                currency = if (symbol.market == Market.KR) "KRW" else "USD",
+            ),
+        )
     }
 }

@@ -90,6 +90,28 @@ class RestQuoteFallbackTest {
         }
 
     @Test
+    fun `drops a REST price the stream has already overtaken`() =
+        runTest {
+            val fallback =
+                RestQuoteFallback(
+                    fetchPrices = { codes -> codes.associateWith { decimal("254.10") } },
+                    symbols = { listOf(AMZN) },
+                    isMarketOpen = { _, _ -> true },
+                    streamSilentFor = { 60.seconds },
+                    paused = { false },
+                    onQuote = { quotes += it },
+                    // A tick for AMZN landed after the request went out.
+                    lastStreamedAt = { Instant.ofEpochMilli(2_000) },
+                    clock = InstantSource.fixed(Instant.ofEpochMilli(1_000)),
+                )
+
+            fallback.run()
+
+            assertThat(quotes).isEmpty()
+            assertThat(fallback.stats().stale).isEqualTo(1)
+        }
+
+    @Test
     fun `counts a failed poll and tries again next time`() =
         runTest {
             val errors = mutableListOf<Exception>()

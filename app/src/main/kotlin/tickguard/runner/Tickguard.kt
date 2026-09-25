@@ -270,6 +270,7 @@ class Tickguard(
             streamSilentFor = { (clock.millis() - lastQuoteAt.toEpochMilli()).milliseconds },
             paused = { link.blockedSince != null },
             onQuote = { restJudging.evaluate(it, rules) },
+            lastStreamedAt = { lastSeen[it]?.at },
             onError = { log.error("fallback quotes failed: {}", reasonOf(it)) },
             silence = config.fallback.silence,
             clock = clock,

@@ -159,16 +159,62 @@ class EngineTest {
 
     @Test
     fun `fires immediately when holdFor is zero`() {
-        val engine = engine(testRule("under-100", Duration.ZERO, 1.hours, underHundred::evaluate))
+        val engine = engine(testRule("under-100", Duration.ZERO, 1.hours, evaluate = underHundred::evaluate))
 
         engine.evaluate(tick("005930", "99"))
 
         assertThat(signals).hasSize(1)
     }
 
+    /** Keyed by how deep the price is, as an escalating rule is, so the key moves while it holds. */
+    private val stepped =
+        testRule(
+            "stepped",
+            2.minutes,
+            1.hours,
+            dedupe = { "${it.trade.code}:${if (it.trade.price < Decimal.of(90)) "deep" else "shallow"}" },
+            evaluate = underHundred::evaluate,
+        )
+
+    @Test
+    fun `forgets a deeper step's clock once the condition stops holding`() {
+        val engine = engine(stepped)
+
+        engine.evaluate(tick("005930", "85"))
+        advance(1.seconds)
+        engine.evaluate(tick("005930", "95"))
+        advance(1.seconds)
+        // Recovered on a tick keyed to the shallow step. The deep step's clock
+        // started two seconds ago and must not survive this.
+        engine.evaluate(tick("005930", "101"))
+        advance(3.minutes)
+        engine.evaluate(tick("005930", "85"))
+
+        assertThat(signals).isEmpty()
+
+        advance(2.minutes)
+        engine.evaluate(tick("005930", "85"))
+        assertThat(signals).hasSize(1)
+    }
+
+    @Test
+    fun `restarts the clock when the key moves to another step`() {
+        val engine = engine(stepped)
+
+        engine.evaluate(tick("005930", "85"))
+        advance(1.minutes)
+        engine.evaluate(tick("005930", "95"))
+        advance(1.minutes)
+        // Two minutes under 100 in all, but the deep step's streak was broken
+        // by the minute spent in the shallow one.
+        engine.evaluate(tick("005930", "85"))
+
+        assertThat(signals).isEmpty()
+    }
+
     @Test
     fun `does not let a pending condition escape the cooldown`() {
-        val engine = engine(testRule("under-100", Duration.ZERO, 1.hours, underHundred::evaluate))
+        val engine = engine(testRule("under-100", Duration.ZERO, 1.hours, evaluate = underHundred::evaluate))
 
         engine.evaluate(tick("005930", "99"))
         advance(1.seconds)
@@ -290,6 +336,7 @@ class EngineTest {
         id: String,
         holdFor: Duration,
         cooldown: Duration,
+        dedupe: (RuleContext) -> String = { it.trade.code },
         evaluate: (RuleContext) -> Outcome?,
     ): Rule =
         object : Rule {
@@ -297,7 +344,7 @@ class EngineTest {
             override val holdFor = holdFor
             override val cooldown = cooldown
 
-            override fun dedupeKey(context: RuleContext) = context.trade.code
+            override fun dedupeKey(context: RuleContext) = dedupe(context)
 
             override fun evaluate(context: RuleContext) = evaluate(context)
         }

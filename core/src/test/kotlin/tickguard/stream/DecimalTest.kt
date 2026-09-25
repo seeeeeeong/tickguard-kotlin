@@ -81,6 +81,13 @@ class DecimalTest {
     }
 
     @Test
+    fun `floors toward negative infinity, counting whole steps`() {
+        assertThat((d("0.019") / d("0.02")).floor()).isEqualTo(0L)
+        assertThat((d("0.02") / d("0.02")).floor()).isEqualTo(1L)
+        assertThat(d("-0.5").floor()).isEqualTo(-1L)
+    }
+
+    @Test
     fun `keeps the sign of a negative value that rounds to zero, as big js does`() {
         assertThat(d("-0.04").format(1)).isEqualTo("-0.0")
         assertThat(d("-0").format(1)).isEqualTo("0.0")

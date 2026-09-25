@@ -55,6 +55,12 @@ that outlived an undelivered alert, SLA incidents lost behind an IP block or sen
 own recovery, one dropped topic invisible to the fallback, stale REST prices, retries of
 permanent refusals, and more.
 
+Behaviour the original did not have comes after that. A drawdown now repeats every four
+hours rather than every hour while it merely persists, and alerts at once each time it
+falls another 2%p (`TICKGUARD_DRAWDOWN_ESCALATE`, default `0.02`): at -7%, -9%, -11%, not
+again on a bounce back to a step already reported. The parity replay pins the original's
+rule, which keeps a cooldown per symbol.
+
 ## Known limits
 
 These are deliberate. None of them has a fix planned.

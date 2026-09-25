@@ -25,6 +25,7 @@ import java.math.RoundingMode
  *   Not a MathContext: that counts significant digits and rounds sums too.
  * - Text is always plain notation; big.js's `toFixed()`, never an exponent.
  */
+@Suppress("TooManyFunctions") // The arithmetic a price needs, so no caller reaches for BigDecimal instead.
 @JvmInline
 value class Decimal private constructor(
     private val value: BigDecimal,
@@ -67,6 +68,9 @@ value class Decimal private constructor(
         val text = value.setScale(places, RoundingMode.HALF_UP).toPlainString()
         return if (value.signum() < 0 && !text.startsWith("-")) "-$text" else text
     }
+
+    /** The largest whole number not above this one. Counting steps without a detour through Double. */
+    fun floor(): Long = value.setScale(0, RoundingMode.FLOOR).longValueExact()
 
     override fun toString(): String = toPlainString()
 

@@ -7,6 +7,7 @@ import tickguard.testing.tick
 import java.time.Instant
 import java.time.InstantSource
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
 class BuiltInTest {
@@ -54,6 +55,69 @@ class BuiltInTest {
         assertThat(signals.single().title).isEqualTo("TSLA 평단 대비 -7.0%")
         assertThat(signals.single().detail).isEqualTo("현재 350.0054 · 평단 376.35 · 보유 10")
         assertThat(signals.single().ruleId).isEqualTo("drawdown-7pct")
+    }
+
+    private fun escalating(holdFor: Duration = Duration.ZERO) =
+        engine(
+            drawdownFromAverage("0.07", holdFor, cooldown = 4.hours, escalateEvery = "0.02"),
+            mapOf("TSLA" to held("TSLA", "100")),
+        )
+
+    @Test
+    fun `drawdown alerts again at once for each step deeper, and not for holding at one`() {
+        val engine = escalating()
+
+        engine.evaluate(tick("TSLA", "92"))
+        engine.evaluate(tick("TSLA", "91.5"))
+        // 8.9% down is still the first step past 7%; 9% is the second.
+        engine.evaluate(tick("TSLA", "91.1"))
+        engine.evaluate(tick("TSLA", "91"))
+        engine.evaluate(tick("TSLA", "88.9"))
+
+        assertThat(
+            signals.map { it.title },
+        ).containsExactly("TSLA 평단 대비 -8.0%", "TSLA 평단 대비 -9.0%", "TSLA 평단 대비 -11.1%")
+        assertThat(engine.stats().suppressed).isEqualTo(2)
+    }
+
+    @Test
+    fun `drawdown stays quiet when the price bounces back to a step it already reported`() {
+        val engine = escalating()
+
+        engine.evaluate(tick("TSLA", "92"))
+        engine.evaluate(tick("TSLA", "90.5"))
+        repeat(3) {
+            engine.evaluate(tick("TSLA", "91.5"))
+            engine.evaluate(tick("TSLA", "90.5"))
+        }
+
+        assertThat(signals).hasSize(2)
+    }
+
+    @Test
+    fun `drawdown makes a deeper step hold before it alerts`() {
+        val engine = escalating(holdFor = 2.minutes)
+
+        engine.evaluate(tick("TSLA", "92"))
+        now += 2.minutes.inWholeMilliseconds
+        engine.evaluate(tick("TSLA", "92"))
+        engine.evaluate(tick("TSLA", "90"))
+        assertThat(signals).hasSize(1)
+
+        now += 2.minutes.inWholeMilliseconds
+        engine.evaluate(tick("TSLA", "90"))
+        assertThat(signals).hasSize(2)
+    }
+
+    @Test
+    fun `drawdown without a step alerts once per cooldown however far it falls, as the original did`() {
+        val engine =
+            engine(drawdownFromAverage("0.07", holdFor = Duration.ZERO), mapOf("TSLA" to held("TSLA", "100")))
+
+        engine.evaluate(tick("TSLA", "92"))
+        engine.evaluate(tick("TSLA", "80"))
+
+        assertThat(signals).hasSize(1)
     }
 
     @Test

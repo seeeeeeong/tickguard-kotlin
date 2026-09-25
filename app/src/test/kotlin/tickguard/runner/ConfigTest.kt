@@ -5,6 +5,7 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import tickguard.subscribe.Topic
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -22,8 +23,16 @@ class ConfigTest {
 
         assertThat(config.rules.drawdownFraction).isEqualTo("0.07")
         assertThat(config.rules.drawdownFor).isEqualTo(2.minutes)
+        assertThat(config.rules.drawdownCooldown).isEqualTo(4.hours)
+        assertThat(config.rules.drawdownEscalateEvery).isEqualTo("0.02")
         assertThat(config.groupWait).isEqualTo(30.seconds)
         assertThat(config.slackWebhookUrl).isNull()
+    }
+
+    @Test
+    fun `reads the escalation step as a ratio, rejecting a percent`() {
+        assertThat(load("TICKGUARD_DRAWDOWN_ESCALATE" to "0.05").rules.drawdownEscalateEvery).isEqualTo("0.05")
+        assertThatThrownBy { load("TICKGUARD_DRAWDOWN_ESCALATE" to "2") }.isInstanceOf(ConfigError::class.java)
     }
 
     @Test

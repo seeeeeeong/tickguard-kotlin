@@ -159,6 +159,42 @@ internal class PostgresOrders(
             }
         }
 
+    override suspend fun ordersSince(since: Instant): List<Order> =
+        withContext(io) {
+            pool.connection.use { db ->
+                db.prepareStatement("$SELECT_ORDER WHERE ordered_at >= ? ORDER BY ordered_at, order_id").use {
+                    it.setObject(1, since.utc())
+                    it.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.order()) } }
+                }
+            }
+        }
+
+    override suspend fun tagOrder(
+        orderId: String,
+        sleeve: String,
+    ) {
+        withContext(io) {
+            pool.connection.use { db ->
+                db
+                    .prepareStatement(
+                        "INSERT INTO sleeve_orders (order_id, sleeve) VALUES (?, ?) " +
+                            "ON CONFLICT (order_id) DO UPDATE SET sleeve = excluded.sleeve",
+                    ).use { it.bindAll(listOf(orderId, sleeve)).executeUpdate() }
+            }
+        }
+    }
+
+    override suspend fun orderTags(): Map<String, String> =
+        withContext(io) {
+            pool.connection.use { db ->
+                db.prepareStatement("SELECT order_id, sleeve FROM sleeve_orders ORDER BY order_id").use {
+                    it.executeQuery().use { rows ->
+                        buildMap { while (rows.next()) put(rows.getString("order_id"), rows.getString("sleeve")) }
+                    }
+                }
+            }
+        }
+
     private companion object {
         /** Numerics read as text, so [Decimal] parses the digits Postgres holds. */
         const val SELECT_ORDER =

@@ -33,6 +33,15 @@ class ScriptedOrders(
     override suspend fun openOrders() = open
 
     override suspend fun orderHistory(orderId: String) = emptyList<OrderChange>()
+
+    override suspend fun ordersSince(since: Instant) = emptyList<Order>()
+
+    override suspend fun tagOrder(
+        orderId: String,
+        sleeve: String,
+    ) = Unit
+
+    override suspend fun orderTags() = emptyMap<String, String>()
 }
 
 class OrderRecorderTest {

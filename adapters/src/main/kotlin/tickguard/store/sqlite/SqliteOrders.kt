@@ -141,6 +141,34 @@ internal class SqliteOrders(
                 }
         }
 
+    override suspend fun ordersSince(since: Instant): List<Order> =
+        withContext(io) {
+            db.prepareStatement("SELECT * FROM orders WHERE ordered_at >= ? ORDER BY ordered_at, order_id").use {
+                it.setLong(1, since.toEpochMilli())
+                it.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.order()) } }
+            }
+        }
+
+    override suspend fun tagOrder(
+        orderId: String,
+        sleeve: String,
+    ) {
+        withContext(io) {
+            db.prepareStatement("INSERT OR REPLACE INTO sleeve_orders (order_id, sleeve) VALUES (?, ?)").use {
+                it.bindAll(listOf(orderId, sleeve)).executeUpdate()
+            }
+        }
+    }
+
+    override suspend fun orderTags(): Map<String, String> =
+        withContext(io) {
+            db.prepareStatement("SELECT order_id, sleeve FROM sleeve_orders ORDER BY order_id").use {
+                it.executeQuery().use { rows ->
+                    buildMap { while (rows.next()) put(rows.getString("order_id"), rows.getString("sleeve")) }
+                }
+            }
+        }
+
     companion object {
         /** Added with the ledger; `IF NOT EXISTS`, so a file of either origin gains them once. */
         val SCHEMA =
@@ -155,6 +183,7 @@ internal class SqliteOrders(
                 )
                 """,
                 "CREATE INDEX IF NOT EXISTS orders_status ON orders (status)",
+                "CREATE TABLE IF NOT EXISTS sleeve_orders (order_id TEXT PRIMARY KEY, sleeve TEXT NOT NULL)",
                 """
                 CREATE TABLE IF NOT EXISTS order_events (
                   order_id TEXT NOT NULL, event TEXT, status TEXT NOT NULL, filled_quantity TEXT NOT NULL,

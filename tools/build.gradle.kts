@@ -89,3 +89,11 @@ tasks.register<JavaExec>("sleeveProposal") {
     mainClass.set("tickguard.tools.SleeveProposalKt")
     workingDir = rootDir
 }
+
+tasks.register<JavaExec>("sleeveStatus") {
+    group = "tickguard"
+    description = "Shows what each test sleeve holds and is worth, from the order ledger."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.SleeveStatusKt")
+    workingDir = rootDir
+}

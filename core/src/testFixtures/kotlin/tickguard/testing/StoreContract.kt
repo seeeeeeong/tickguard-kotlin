@@ -528,6 +528,20 @@ abstract class StoreContract {
             assertThat(h.store.openOrders().map { it.orderId }).containsExactly("early", "late")
         }
 
+    @Test
+    fun `lists the orders placed since a moment, oldest first, and keeps sleeve tags across a restart`() =
+        contract { h ->
+            h.store.recordOrder(order(orderId = "late", orderedAt = at(3_000)), null, OrderSource.RESYNC, at(9_000))
+            h.store.recordOrder(order(orderId = "early", orderedAt = at(2_000)), null, OrderSource.RESYNC, at(9_000))
+            h.store.recordOrder(order(orderId = "before", orderedAt = at(1_000)), null, OrderSource.RESYNC, at(9_000))
+            h.store.tagOrder("late", "C")
+            h.store.tagOrder("late", "A")
+            h.restart()
+
+            assertThat(h.store.ordersSince(at(2_000)).map { it.orderId }).containsExactly("early", "late")
+            assertThat(h.store.orderTags()).isEqualTo(mapOf("late" to "A"))
+        }
+
     private fun bar(
         day: String,
         close: String,

@@ -81,3 +81,11 @@ tasks.register<JavaExec>("strategyReport") {
     mainClass.set("tickguard.tools.StrategyReportKt")
     workingDir = rootDir
 }
+
+tasks.register<JavaExec>("sleeveProposal") {
+    group = "tickguard"
+    description = "Prints the three test sleeves' opening trades from stored bars. Takes KRW per USD."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.SleeveProposalKt")
+    workingDir = rootDir
+}

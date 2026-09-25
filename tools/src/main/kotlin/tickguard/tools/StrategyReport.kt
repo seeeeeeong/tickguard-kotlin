@@ -2,9 +2,6 @@ package tickguard.tools
 
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import tickguard.store.Store
-import tickguard.store.postgres.PostgresStore
-import tickguard.store.sqlite.SqliteStore
 import tickguard.stream.Decimal
 import tickguard.trading.Bar
 import tickguard.trading.BuyAndHold
@@ -134,12 +131,3 @@ fun report(
 
 /** A ratio times this is a percent. */
 private const val PERCENT = 100
-
-private fun openStore(env: Map<String, String>): Store {
-    val url = env["TICKGUARD_PG_URL"]
-    return if (url.isNullOrEmpty()) {
-        SqliteStore.open(env["TICKGUARD_DB"] ?: "tickguard.db")
-    } else {
-        PostgresStore.open(url, env.getValue("TICKGUARD_PG_USER"), env.getValue("TICKGUARD_PG_PASSWORD"))
-    }
-}

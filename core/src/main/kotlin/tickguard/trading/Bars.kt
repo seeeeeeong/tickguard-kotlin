@@ -47,6 +47,17 @@ class History internal constructor(
         count: Int,
     ): List<Decimal>? = bars(code, count).takeIf { it.size == count }?.map { it.close }
 
+    companion object {
+        /** A view on [day] of whole series that may run past it: each is cut at [day]. */
+        fun of(
+            day: LocalDate,
+            series: Map<String, List<Bar>>,
+        ): History {
+            val sorted = series.mapValues { (_, bars) -> bars.sortedBy { it.day } }
+            return History(day, sorted, sorted.mapValues { (_, bars) -> bars.count { !it.day.isAfter(day) } })
+        }
+    }
+
     /** Whether [code] traded on [day] itself: no bar that day, no decision on today's close. */
     fun tradedToday(code: String): Boolean = bars(code, 1).lastOrNull()?.day == day
 }

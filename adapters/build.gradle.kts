@@ -12,7 +12,14 @@ dependencies {
     implementation(libs.okhttp.coroutines)
     // In-process and one file to back up, as node:sqlite was for the original.
     implementation(libs.sqlite.jdbc)
+    // The store once it outgrows one file: a job queue and a ledger need
+    // transactions across processes, and backtests want SQL over the ticks.
+    implementation(libs.postgresql)
+    implementation(libs.hikaricp)
+    implementation(libs.flyway.core)
+    runtimeOnly(libs.flyway.postgresql)
 
     testImplementation(libs.mockwebserver)
     testImplementation(testFixtures(project(":core")))
+    testImplementation(libs.testcontainers.postgresql)
 }

@@ -32,7 +32,24 @@ class RuleContext(
      * full span must check `span` rather than trust the request.
      */
     val window: (Duration) -> WindowSnapshot?,
+    /**
+     * Called by a rule that cannot answer, as opposed to one whose condition
+     * does not hold. Counted per reason, so a rule that never fires can be
+     * told apart from one that is never able to.
+     */
+    val decline: (DeclineReason) -> Unit = {},
 )
+
+/** Why a rule could not answer. Closed, so every reason is counted from the first scrape. */
+enum class DeclineReason(
+    val wire: String,
+) {
+    /** A position rule for a symbol that is watched but not held, or before holdings loaded. */
+    NO_POSITION("no-position"),
+
+    /** Too little history to cover the rule's window: fewer than two prints, or under half the span. */
+    INSUFFICIENT_SPAN("insufficient-span"),
+}
 
 data class Signal(
     val ruleId: String,

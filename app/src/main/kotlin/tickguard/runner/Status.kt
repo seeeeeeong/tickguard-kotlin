@@ -173,6 +173,15 @@ internal fun registerMetrics(
             )
         }
     }
+    metrics.fromStats(
+        "tickguard.rules.declined",
+        "Evaluations a rule could not answer.",
+        counter = true,
+        labelName = "reason",
+    ) {
+        app.snapshot.rules.declined
+            .mapKeys { it.key.wire }
+    }
     metrics.fromStats("tickguard.notify", "Delivery outcomes.", counter = true) {
         with(app.notifier.stats()) { mapOf("delivered" to delivered, "retried" to retried, "abandoned" to abandoned) }
     }

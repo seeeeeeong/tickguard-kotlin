@@ -9,6 +9,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.InstantSource
+import java.time.LocalTime
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -144,5 +145,48 @@ class SchedulerTest {
             now = Instant.parse("2026-09-24T00:02:30+09:00")
             advance(1.minutes)
             assertThat(runs).isEqualTo(2)
+        }
+
+    @Test
+    fun `a time-of-day task runs once a Seoul day, from its hour on, and at start if already past it`() =
+        runTest {
+            var now = Instant.parse("2026-11-02T08:59:00+09:00")
+            var runs = 0
+            Scheduler(
+                listOf(timeOfDayTask("rebalance", LocalTime.of(9, 0), { now }) { runs += 1 }),
+                backgroundScope,
+            ).start()
+            runCurrent()
+            assertThat(runs).isZero()
+
+            now = Instant.parse("2026-11-02T09:00:00+09:00")
+            advance(1.minutes)
+            assertThat(runs).isEqualTo(1)
+
+            now = Instant.parse("2026-11-02T15:00:00+09:00")
+            advance(1.minutes)
+            assertThat(runs).isEqualTo(1)
+
+            now = Instant.parse("2026-11-03T09:01:00+09:00")
+            advance(1.minutes)
+            assertThat(runs).isEqualTo(2)
+        }
+
+    @Test
+    fun `a time-of-day task started after its hour runs straight away`() =
+        runTest {
+            var runs = 0
+            Scheduler(
+                listOf(
+                    timeOfDayTask("rebalance", LocalTime.of(9, 0), { Instant.parse("2026-11-02T13:00:00+09:00") }) {
+                        runs +=
+                            1
+                    },
+                ),
+                backgroundScope,
+            ).start()
+            runCurrent()
+
+            assertThat(runs).isEqualTo(1)
         }
 }

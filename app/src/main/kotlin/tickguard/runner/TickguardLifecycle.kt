@@ -6,6 +6,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.context.SmartLifecycle
 import tickguard.network.reasonOf
+import java.time.LocalTime
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -85,6 +86,8 @@ class TickguardLifecycle(
                     ScheduledTask("news", config.intervals.news, immediate = true) { app.tasks.collectNews() },
                     dailyTask("calendar") { app.tasks.loadCalendars() },
                     ScheduledTask("bars", config.intervals.bars, immediate = true) { app.tasks.refreshBars() },
+                    // After the morning's bar refresh, long before the evening's session.
+                    timeOfDayTask("rebalance", REBALANCE_AT) { app.sleeves.propose() },
                 ),
             scope = engine,
             onError = { error, task -> log.error("scheduled task {} failed: {}", task, reasonOf(error)) },
@@ -92,6 +95,9 @@ class TickguardLifecycle(
 
     private companion object {
         val log: Logger = LoggerFactory.getLogger(TickguardLifecycle::class.java)
+
+        /** When a rebalance day's proposal goes out, in Seoul: the US session opens at 22:30 or 23:30. */
+        val REBALANCE_AT: LocalTime = LocalTime.of(9, 0)
 
         /** How stale the status page and metrics may be. */
         val SNAPSHOT_EVERY = 5.seconds

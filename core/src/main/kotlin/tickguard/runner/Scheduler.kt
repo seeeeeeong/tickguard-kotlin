@@ -5,8 +5,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import tickguard.time.SEOUL
 import tickguard.time.kstDate
 import java.time.InstantSource
+import java.time.LocalDate
+import java.time.LocalTime
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
@@ -125,3 +128,25 @@ fun dailyTask(
 
 /** How often a daily task looks at the date. A minute late at midnight is fine. */
 private val DAILY_CHECK = 1.minutes
+
+/**
+ * Runs once per Seoul date, the first time the clock reads [at] or later that
+ * day. A process that starts after [at] runs it at start, so a deploy on a
+ * rebalance morning does not skip the month. Marked done only once it worked,
+ * so a failure is retried on the next minute.
+ */
+fun timeOfDayTask(
+    name: String,
+    at: LocalTime,
+    clock: InstantSource = InstantSource.system(),
+    run: suspend () -> Unit,
+): ScheduledTask {
+    var lastDone: LocalDate? = null
+    return ScheduledTask(name, DAILY_CHECK, immediate = true) {
+        val now = clock.instant().atZone(SEOUL)
+        if (now.toLocalTime() >= at && now.toLocalDate() != lastDone) {
+            run()
+            lastDone = now.toLocalDate()
+        }
+    }
+}

@@ -383,6 +383,12 @@ class PostgresStore private constructor(
             password: String,
             schema: String = "tickguard",
             io: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(POOL_SIZE),
+            /**
+             * False for a tool: it reads the schema the deployed service keeps, and an
+             * unmerged branch's tool must never move it (one once applied a migration
+             * to the live database before the change was merged).
+             */
+            migrate: Boolean = true,
         ): PostgresStore {
             val pool =
                 HikariDataSource(
@@ -397,17 +403,19 @@ class PostgresStore private constructor(
                         addDataSourceProperty("reWriteBatchedInserts", "true")
                     },
                 )
-            try {
-                Flyway
-                    .configure()
-                    .dataSource(pool)
-                    .schemas(schema)
-                    .locations("classpath:db/postgres")
-                    .load()
-                    .migrate()
-            } catch (failure: org.flywaydb.core.api.FlywayException) {
-                pool.close()
-                throw failure
+            if (migrate) {
+                try {
+                    Flyway
+                        .configure()
+                        .dataSource(pool)
+                        .schemas(schema)
+                        .locations("classpath:db/postgres")
+                        .load()
+                        .migrate()
+                } catch (failure: org.flywaydb.core.api.FlywayException) {
+                    pool.close()
+                    throw failure
+                }
             }
             return PostgresStore(pool, io)
         }

@@ -51,6 +51,12 @@ fun openStore(env: Map<String, String>): Store {
     return if (url.isNullOrEmpty()) {
         SqliteStore.open(env["TICKGUARD_DB"] ?: "tickguard.db")
     } else {
-        PostgresStore.open(url, env.getValue("TICKGUARD_PG_USER"), env.getValue("TICKGUARD_PG_PASSWORD"))
+        // A tool never migrates: the deployed service owns the schema.
+        PostgresStore.open(
+            url,
+            env.getValue("TICKGUARD_PG_USER"),
+            env.getValue("TICKGUARD_PG_PASSWORD"),
+            migrate = false,
+        )
     }
 }

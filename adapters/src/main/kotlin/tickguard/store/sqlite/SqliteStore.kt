@@ -7,6 +7,7 @@ import tickguard.news.NewsItem
 import tickguard.news.NewsKey
 import tickguard.news.NewsSourceName
 import tickguard.news.StoredNews
+import tickguard.orders.OrderStore
 import tickguard.rules.Signal
 import tickguard.store.Store
 import tickguard.store.StoredSignal
@@ -38,7 +39,8 @@ import java.time.Instant
 class SqliteStore private constructor(
     private val db: Connection,
     private val io: CoroutineDispatcher,
-) : Store {
+) : Store,
+    OrderStore by SqliteOrders(db, io) {
     override suspend fun firesSince(since: Instant): Map<String, Instant> =
         query("SELECT key, fired_at FROM fires WHERE fired_at >= ? AND delivered = 1", since.toEpochMilli()) {
             it.getString("key") to it.instant("fired_at")
@@ -372,6 +374,9 @@ private fun migrate(db: Connection) {
     if ("delivered" !in columns) {
         db.createStatement().use { it.execute("ALTER TABLE fires ADD COLUMN delivered INTEGER NOT NULL DEFAULT 1") }
     }
+    // The order ledger. The original never had it and never reads it, so a
+    // rollback leaves these tables unused rather than in the way.
+    SqliteOrders.SCHEMA.forEach { sql -> db.createStatement().use { it.execute(sql) } }
 }
 
 private fun PreparedStatement.bind(vararg values: Any): PreparedStatement {

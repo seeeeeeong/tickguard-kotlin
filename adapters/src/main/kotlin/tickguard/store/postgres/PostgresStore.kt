@@ -10,6 +10,7 @@ import tickguard.news.NewsItem
 import tickguard.news.NewsKey
 import tickguard.news.NewsSourceName
 import tickguard.news.StoredNews
+import tickguard.orders.OrderStore
 import tickguard.rules.Signal
 import tickguard.store.Store
 import tickguard.store.StoredSignal
@@ -42,7 +43,8 @@ import java.time.ZoneOffset
 class PostgresStore private constructor(
     private val pool: HikariDataSource,
     private val io: CoroutineDispatcher,
-) : Store {
+) : Store,
+    OrderStore by PostgresOrders(pool, io) {
     override suspend fun firesSince(since: Instant): Map<String, Instant> =
         query("SELECT key, fired_at FROM fires WHERE fired_at >= ? AND delivered ORDER BY fired_at, key", since) {
             it.getString("key") to it.instant("fired_at")

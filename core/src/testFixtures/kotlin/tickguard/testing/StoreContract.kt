@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test
 import tickguard.news.NewsItem
 import tickguard.news.NewsKey
 import tickguard.news.NewsSourceName
+import tickguard.orders.OrderSource
+import tickguard.orders.Recorded
 import tickguard.rules.Outcome
 import tickguard.rules.Rule
 import tickguard.rules.RuleContext
@@ -408,5 +410,99 @@ abstract class StoreContract {
             h.store.pruneVerdicts(at(2_500))
 
             assertThat(h.store.modelCallsSince(at(0))).isEqualTo(1)
+        }
+
+    @Test
+    fun `records an order it has not seen and reads it back as it was`() =
+        contract { h ->
+            val market = order(orderId = "m1", status = "PENDING", filled = "0", price = null)
+            val filled = order(orderId = "f1")
+
+            assertThat(
+                h.store.recordOrder(market, "PENDING", OrderSource.STREAM, at(1_000)),
+            ).isEqualTo(Recorded.NEW_STATE)
+            assertThat(h.store.recordOrder(filled, "FILL", OrderSource.STREAM, at(1_000))).isEqualTo(Recorded.NEW_STATE)
+
+            assertThat(h.store.order("m1")).isEqualTo(market)
+            assertThat(h.store.order("f1")).isEqualTo(filled)
+            assertThat(h.store.order("nope")).isNull()
+        }
+
+    @Test
+    fun `does nothing with a change it has already seen, from either source`() =
+        contract { h ->
+            h.store.recordOrder(order(filled = "10"), "FILL", OrderSource.STREAM, at(1_000))
+
+            // The resync after a reconnect reports the same fill, written differently.
+            val again = h.store.recordOrder(order(filled = "10.0"), null, OrderSource.RESYNC, at(2_000))
+
+            assertThat(again).isEqualTo(Recorded.REPEAT)
+            assertThat(h.store.orderHistory("o1").map { it.source }).containsExactly(OrderSource.STREAM)
+        }
+
+    @Test
+    fun `moves an order forward and keeps every step in the order seen`() =
+        contract { h ->
+            h.store.recordOrder(order(status = "PENDING", filled = "0"), "PENDING", OrderSource.STREAM, at(1_000))
+            h.store.recordOrder(
+                order(status = "PARTIAL_FILLED", filled = "3"),
+                "PARTIAL_FILL",
+                OrderSource.STREAM,
+                at(2_000),
+            )
+            h.store.recordOrder(order(status = "FILLED", filled = "10"), null, OrderSource.RESYNC, at(3_000))
+
+            assertThat(h.store.order("o1")!!.status).isEqualTo("FILLED")
+            assertThat(
+                h.store.orderHistory("o1").map { Triple(it.event, it.status, it.filledQuantity.toPlainString()) },
+            ).containsExactly(
+                Triple("PENDING", "PENDING", "0"),
+                Triple("PARTIAL_FILL", "PARTIAL_FILLED", "3"),
+                Triple(null, "FILLED", "10"),
+            )
+        }
+
+    @Test
+    fun `keeps a late older change in the history without rolling the order back`() =
+        contract { h ->
+            h.store.recordOrder(order(status = "FILLED", filled = "10"), null, OrderSource.RESYNC, at(1_000))
+
+            val late =
+                h.store.recordOrder(
+                    order(status = "PARTIAL_FILLED", filled = "3"),
+                    "PARTIAL_FILL",
+                    OrderSource.STREAM,
+                    at(2_000),
+                )
+
+            assertThat(late).isEqualTo(Recorded.STALE)
+            assertThat(h.store.order("o1")!!.status).isEqualTo("FILLED")
+            assertThat(h.store.orderHistory("o1")).hasSize(2)
+        }
+
+    @Test
+    fun `lists only the orders still working, oldest first, across a restart`() =
+        contract { h ->
+            h.store.recordOrder(
+                order(orderId = "late", status = "PENDING", filled = "0", orderedAt = at(2_000)),
+                null,
+                OrderSource.RESYNC,
+                at(5_000),
+            )
+            h.store.recordOrder(
+                order(orderId = "done", status = "FILLED", orderedAt = at(1_500)),
+                null,
+                OrderSource.RESYNC,
+                at(5_000),
+            )
+            h.store.recordOrder(
+                order(orderId = "early", status = "PARTIAL_FILLED", filled = "3", orderedAt = at(1_000)),
+                null,
+                OrderSource.RESYNC,
+                at(5_000),
+            )
+            h.restart()
+
+            assertThat(h.store.openOrders().map { it.orderId }).containsExactly("early", "late")
         }
 }

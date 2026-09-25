@@ -1,6 +1,7 @@
 package tickguard.store
 
 import tickguard.news.NewsStore
+import tickguard.orders.OrderStore
 import tickguard.rules.CooldownStore
 import tickguard.subscribe.RejectionStore
 import tickguard.verdict.VerdictStore
@@ -22,6 +23,8 @@ import java.time.Instant
  *   between publication and discovery can be measured per source.
  * - **Verdicts and model calls.** A story judged is not judged again, and a
  *   daily call budget that restarted with the process would not be one.
+ * - **Orders.** What the account actually did. The stream never redelivers
+ *   an event, so what was heard is kept rather than asked for again.
  *
  * Every method suspends. The SQLite adapter answers in-process, but a database
  * across a network cannot, and the interface is the one both must honour;
@@ -33,7 +36,8 @@ interface Store :
     RejectionStore,
     TickStore,
     NewsStore,
-    VerdictStore {
+    VerdictStore,
+    OrderStore {
     /** For measuring how often a rule was right, once outcomes are known. Newest first. */
     suspend fun recentSignals(limit: Int): List<StoredSignal>
 

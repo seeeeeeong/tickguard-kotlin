@@ -113,6 +113,10 @@ class TickguardTest {
             """"averageFilledPrice":"100","filledAmount":"100","commission":"0.1","tax":"0",""" +
             """"settlementDate":null}}}}"""
 
+    /** The account's holdings as the fake answers them. */
+    @Volatile private var heldJson =
+        """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+
     private inner class FakeToss : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
             val path = request.url.encodedPath
@@ -126,10 +130,7 @@ class TickguardTest {
                 }
 
                 path == "/api/v1/holdings" -> {
-                    json(
-                        """{"result":{"items":[""" +
-                            """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}]}}""",
-                    )
+                    json("""{"result":{"items":[$heldJson]}}""")
                 }
 
                 path == "/api/v1/orders" && request.method == "POST" -> {
@@ -469,6 +470,36 @@ class TickguardTest {
                 assertThat(orderPosts.single()).contains("\"symbol\":\"SPY\"").contains("\"orderAmount\":\"731.98\"")
                 assertThat(store.orderTags().values).containsExactly("D")
 
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `halts instead of trading when the account holds parked SPY the ledger never recorded`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"SPY","marketCountry":"US","quantity":"1.5","averagePurchasePrice":"500"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "자동 주문 중지" in it && "SPY" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                assertThat(orderPosts).isEmpty()
+                assertThat(app.sleeves.halted()).isTrue()
                 withContext(engine.coroutineContext) { app.stop() }
             }
         }

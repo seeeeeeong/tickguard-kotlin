@@ -64,6 +64,7 @@ import tickguard.toss.auth.TossAuthClient
 import tickguard.toss.execution.TossOrderPlacer
 import tickguard.toss.gateway.OkHttpSocketFactory
 import tickguard.toss.rest.OkHttpRestClient
+import tickguard.trading.RefreshedBars
 import tickguard.trading.TestSleeves
 import tickguard.trading.refreshBars
 import tickguard.verdict.Direction
@@ -302,9 +303,18 @@ class Tickguard(
         )
 
     internal val sleeves =
-        SleeveDesk(store, rest, clock, ::report, config.trading, Executor(placer, store), calendar, engine) {
-            tasks.refreshBars()
-        }
+        SleeveDesk(
+            store,
+            rest,
+            clock,
+            ::report,
+            config.trading,
+            Executor(placer, store),
+            calendar,
+            engine,
+            refresh = { check(tasks.refreshBars().unreadable.isEmpty()) { "bars came back unreadable" } },
+            account = { holdings.refresh().positions.mapValues { it.value.quantity } },
+        )
 
     private var loggedRecordFailure = false
 
@@ -432,7 +442,7 @@ class Tickguard(
          * The test sleeves' recent daily bars, fetched with the service's own
          * token: a separate tool would issue a second token and revoke this one.
          */
-        suspend fun refreshBars() {
+        suspend fun refreshBars(): RefreshedBars {
             val codes = TestSleeves.ALL.flatMap { it.universe }.distinct()
             val from = LocalDate.now(clock.withZone(SEOUL)).minusDays(BAR_OVERLAP_DAYS)
             val refreshed = refreshBars(rest, store, codes, from)
@@ -444,6 +454,7 @@ class Tickguard(
                 )
             }
             log.info("bars: {} written for {} symbols", refreshed.written, codes.size)
+            return refreshed
         }
 
         /** Refreshes what the status page and the metrics read from other threads. */

@@ -150,14 +150,16 @@ fun proposeDip(
     val spendable = position.cash - rules.buffer
     val needed = buys.fold(Decimal.ZERO) { sum, trade -> sum + trade.value }
     when {
-        needed > spendable && parked.signum() > 0 -> {
-            // Sell a little more than the shortfall: the fill is at tomorrow's price, not today's close.
-            val shortfall = (needed - spendable) * PARKING_MARGIN / parkPrice
-            sells += sell(rules.parking, if (shortfall > parked) parked else shortfall, parkPrice)
-        }
-
         needed > spendable -> {
-            buys.retainAll(affordable(buys, spendable))
+            // Keep the buys cash and all of the parking could pay for, then sell only the parking they need,
+            // a little more than the shortfall since the fill is at tomorrow's price, not today's close.
+            val kept = affordable(buys, spendable + parked * parkPrice / PARKING_MARGIN)
+            buys.retainAll(kept)
+            val shortfall =
+                (kept.fold(Decimal.ZERO) { sum, trade -> sum + trade.value } - spendable) * PARKING_MARGIN / parkPrice
+            if (shortfall.signum() > 0 && parked.signum() > 0) {
+                sells += sell(rules.parking, if (shortfall > parked) parked else shortfall, parkPrice)
+            }
         }
 
         buying && spendable - needed >= rules.minPark -> {

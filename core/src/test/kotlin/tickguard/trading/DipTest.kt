@@ -128,6 +128,13 @@ class DipTest {
     }
 
     @Test
+    fun `drops a buy that cash and all of the parking cannot pay for, and then sells no parking`() {
+        val trades = propose(position("5", "SPY" to "0.1"), emptyMap(), "AAA" to dip(), "SPY" to flat(500.0)).trades
+
+        assertThat(trades).isEmpty()
+    }
+
+    @Test
     fun `only sells past the loss limit`() {
         val lot = Lot(d("1"), d("100"), d("100"), 1)
         val proposal =

@@ -40,6 +40,7 @@ import java.time.Instant
 import java.time.InstantSource
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.Period
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 
@@ -60,8 +61,10 @@ internal class SleeveDesk(
     private val calendar: Calendar,
     /** The engine: proposals and orders run where the rest of the domain state does. */
     private val scope: CoroutineScope,
-    /** Fetches the latest daily bars; a proposal must not be priced on a close the store has not seen. */
+    /** Fetches the latest daily bars, throwing if any are unreadable: a proposal must not price on an old close. */
     private val refresh: suspend () -> Unit = {},
+    /** The account's shares by symbol, fresh: what the ledger is checked against before a dip sleeve trades. */
+    private val account: suspend () -> Map<String, Decimal> = { emptyMap() },
 ) {
     /** The last proposals made, for the execution module and the status page. */
     @Volatile var proposals: List<SleeveProposal> = emptyList()
@@ -214,6 +217,41 @@ internal class SleeveDesk(
         return lines.ifEmpty { listOf("보낼 주문 없음") }.joinToString("\n")
     }
 
+    /** A dip proposal priced on a close older than [STALE_BARS] is dropped: its signal is about another week. */
+    private fun fresh(
+        proposal: SleeveProposal,
+        today: LocalDate,
+    ): Boolean =
+        (!proposal.asOf.isBefore(today.minus(STALE_BARS))).also {
+            if (!it) log.warn("rebalance: {} skipped, last close {} is stale", proposal.sleeve.id, proposal.asOf)
+        }
+
+    /**
+     * Why the account contradicts the ledger, or null if it does not: more
+     * of a dip sleeve's parking symbol than every sleeve's fills explain
+     * means an order was placed whose sleeve was never recorded, and the
+     * sleeve would spend that money again. Only the parking symbol is
+     * checked: the user holds none of it, while any of the dip symbols may
+     * also be the user's own. It is also where most of the money sits.
+     */
+    private suspend fun untracked(owned: Map<String, List<Order>>): String? {
+        val parking =
+            TestSleeves.ALL
+                .filter { (trading.modes[it.id] ?: SleeveMode.OFF) != SleeveMode.OFF }
+                .mapNotNull { it.dip?.parking }
+                .distinct()
+        if (parking.isEmpty()) return null
+        val held = account()
+        val ledger =
+            TestSleeves.ALL.map { position(it, owned[it.id].orEmpty()).holdings }
+        val extra =
+            parking.filter { code ->
+                val recorded = ledger.fold(Decimal.ZERO) { sum, holdings -> sum + (holdings[code] ?: Decimal.ZERO) }
+                (held[code] ?: Decimal.ZERO) - recorded > SHARE_TOLERANCE
+            }
+        return extra.takeIf { it.isNotEmpty() }?.let { "계좌 보유가 장부보다 많음: ${it.joinToString()} — 기록 안 된 주문 확인 필요" }
+    }
+
     private fun clockTime(at: Instant?) = at?.let { CLOCK.format(it) }.orEmpty()
 
     private fun size(order: OrderRequest) =
@@ -267,9 +305,18 @@ internal class SleeveDesk(
                     }
                 val mine = owned[sleeve.id].orEmpty()
                 val position = position(sleeve, mine)
-                sleeve.dip?.let { proposeDip(sleeve, position, lots(mine), bars, it) }
-                    ?: proposeRebalance(sleeve, position, bars)
+                val rules = sleeve.dip
+                if (rules == null) {
+                    proposeRebalance(sleeve, position, bars)
+                } else {
+                    proposeDip(sleeve, position, lots(mine), bars, rules)?.takeIf { fresh(it, today) }
+                }
             }
+        untracked(owned)?.let { reason ->
+            executor.halt(reason)
+            report(Signal(EXECUTION_ID, "-", "자동 주문 중지", reason, clock.instant()))
+            log.error("execution halted: {}", reason)
+        }
         proposals = made
         proposedAt = clock.instant()
         val fx = fetchUsdKrw(rest)
@@ -313,6 +360,12 @@ internal class SleeveDesk(
 
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
+
+        /** Four days covers a weekend and a holiday; an older last close means the bars stopped updating. */
+        val STALE_BARS: Period = Period.ofDays(4)
+
+        /** Shares the account and the ledger may differ by: fills are quoted to six places. */
+        val SHARE_TOLERANCE: Decimal = Decimal.parse("0.0001", "tolerance")
 
         /** How long a failed proposal waits before the next try. */
         val RETRY_AFTER: Duration = Duration.ofMinutes(15)

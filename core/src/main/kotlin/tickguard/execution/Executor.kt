@@ -1,5 +1,6 @@
 package tickguard.execution
 
+import kotlinx.coroutines.CancellationException
 import tickguard.orders.OrderStore
 
 /** What the broker said to one order. */
@@ -55,12 +56,18 @@ class Executor(
     suspend fun run(plan: OrderPlan): ExecutionResult {
         val placed = ArrayList<Pair<OrderRequest, String>>()
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
-        if (halted != null) return ExecutionResult(placed, refused, null)
+        var stop: Pair<OrderRequest, String>? = null
         for (request in plan.live) {
+            if (halted != null) break
             when (val outcome = placer.place(request)) {
                 is PlaceOutcome.Placed -> {
-                    orders.tagOrder(outcome.orderId, request.sleeve)
                     placed += request to outcome.orderId
+                    // The order exists but no sleeve owns it: its sleeve would count the money as
+                    // unspent and spend it again. Nothing more goes out until a person looks.
+                    tag(outcome.orderId, request.sleeve)?.let { why ->
+                        halted = "${request.clientOrderId}: placed as ${outcome.orderId}, sleeve not recorded ($why)"
+                        stop = request to "sleeve not recorded"
+                    }
                 }
 
                 is PlaceOutcome.Refused -> {
@@ -69,10 +76,30 @@ class Executor(
 
                 is PlaceOutcome.Unknown -> {
                     halted = "${request.clientOrderId}: ${outcome.reason}"
-                    return ExecutionResult(placed, refused, request to outcome.reason)
+                    stop = request to outcome.reason
                 }
             }
         }
-        return ExecutionResult(placed, refused, null)
+        return ExecutionResult(placed, refused, stop)
     }
+
+    /** Stops every order until restart, for a reason found outside a run, such as a ledger the account contradicts. */
+    fun halt(reason: String) {
+        halted = reason
+    }
+
+    /** Records the order's sleeve; returns why it could not, or null once recorded. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the store threw, the tag is missing.
+    private suspend fun tag(
+        orderId: String,
+        sleeve: String,
+    ): String? =
+        try {
+            orders.tagOrder(orderId, sleeve)
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            failure.message ?: failure.javaClass.simpleName
+        }
 }

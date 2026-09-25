@@ -63,6 +63,31 @@ class ExecutorTest {
         }
 
     @Test
+    fun `halts when an accepted order's sleeve cannot be recorded, since its money would be spent again`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val broken =
+                object : tickguard.orders.OrderStore by ScriptedOrders(Recorded.REPEAT) {
+                    override suspend fun tagOrder(
+                        orderId: String,
+                        sleeve: String,
+                    ): Unit = error("database is down")
+                }
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("o-${it.symbol}")
+                }, broken)
+
+            val result = executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList()))
+
+            assertThat(sent).containsExactly("SPY")
+            assertThat(result.placed.map { it.second }).containsExactly("o-SPY")
+            assertThat(result.haltedAt?.second).isEqualTo("sleeve not recorded")
+            assertThat(executor.halted).contains("o-SPY").contains("database is down")
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

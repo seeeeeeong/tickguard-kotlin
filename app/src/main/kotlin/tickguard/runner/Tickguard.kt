@@ -473,14 +473,26 @@ class Tickguard(
         load: suspend () -> Unit,
     ): Boolean {
         startup = "waiting for $step"
-        return retryUntilDone(
-            run = load,
-            isCancelled = { stopping },
-            onFailure = { error, attempt, delay ->
-                startup = "waiting for $step · attempt $attempt · ${reasonOf(error)}"
-                log.error("startup: {} failed: {}, retrying in {}", step, reasonOf(error), delay)
-            },
-        )
+        var failures = 0
+        val loaded =
+            retryUntilDone(
+                run = load,
+                isCancelled = { stopping },
+                onFailure = { error, attempt, delay, repeated ->
+                    failures = attempt
+                    startup = "waiting for $step · attempt $attempt · ${reasonOf(error)}"
+                    // The first of a run of identical failures is the news; the rest
+                    // are on the status page. A blocked IP otherwise wrote the same
+                    // ERROR line every half minute until someone registered it.
+                    if (repeated) {
+                        log.debug("startup: {} failed again: {}, retrying in {}", step, reasonOf(error), delay)
+                    } else {
+                        log.error("startup: {} failed: {}, retrying in {}", step, reasonOf(error), delay)
+                    }
+                },
+            )
+        if (loaded && failures > 0) log.info("startup: {} loaded after {} failed attempts", step, failures)
+        return loaded
     }
 
     /**

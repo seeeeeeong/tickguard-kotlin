@@ -50,8 +50,26 @@ The port is checked against the original, not against a description of it.
   cut-over.
 - **Tests:** every test in the original has a counterpart here.
 
-Known defects of the original are ported as they are, and fixed after parity, one change
-each.
+After parity, the original's known defects were fixed one change each (#28–#38): cooldowns
+that outlived an undelivered alert, SLA incidents lost behind an IP block or sent with their
+own recovery, one dropped topic invisible to the fallback, stale REST prices, retries of
+permanent refusals, and more.
+
+## Known limits
+
+These are deliberate. None of them has a fix planned.
+
+- **A hold restarts with the process.** The time a condition has held toward a rule's
+  `holdFor` lives in memory. A drawdown that had held for 1m59s before a deploy needs its
+  full two minutes again afterwards. Persisting it would mean a write per qualifying tick.
+- **The clock is trusted to move forward.** Holds, cooldowns and windows compare wall-clock
+  instants. A clock stepped backwards lengthens whatever was running, until time catches up.
+  The keepalive reads the same clock on purpose: the server's 180s deadline is wall-clock
+  time, and a monotonic clock stops while the host sleeps.
+- **Open SLA incidents live in memory.** A restart between a silence page and the feed's
+  return drops the recovery page. The next silence is paged normally.
+- **Quotes are lossy by design.** The reconciler measures drift against REST. It cannot
+  replay what the socket dropped, and nothing can.
 
 ## Development
 

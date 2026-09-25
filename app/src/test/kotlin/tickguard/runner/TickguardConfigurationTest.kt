@@ -61,7 +61,7 @@ class TickguardConfigurationTest
                 )
 
             assertThat(page.statusCode()).isEqualTo(200)
-            assertThat(page.body()).contains("tickguard 제어").contains("자동 주문이 꺼져 있습니다")
+            assertThat(page.body()).contains("오늘 주문").contains("자동 주문이 꺼져 있어요")
             assertThat(bare.statusCode()).isEqualTo(403)
         }
 

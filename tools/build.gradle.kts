@@ -72,3 +72,12 @@ tasks.register<JavaExec>("backfillBars") {
     mainClass.set("tickguard.tools.BackfillBarsKt")
     workingDir = rootDir
 }
+
+tasks.register<JavaExec>("strategyReport") {
+    group = "tickguard"
+    description =
+        "Compares the candidate strategies with holding on stored daily bars, over the whole span and each half."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("tickguard.tools.StrategyReportKt")
+    workingDir = rootDir
+}

@@ -32,21 +32,47 @@ internal object Rules {
     fun featuresAcyclic(root: String): ArchRule = slices().matching("$root.(*)..").should().beFreeOfCycles()
 
     /**
-     * The one Toss call allowed to write is token issuance. Anything else that
-     * sends a body is an order endpoint, and those hit a live account with real
-     * money. A client that cannot express the call is a cheaper guarantee than
-     * remembering not to make it.
+     * Two Toss calls may write: token issuance, and order placement from the
+     * execution module the user approved. Anything else that sends a body is an
+     * order endpoint, and those hit a live account with real money. A client
+     * that cannot express the call is a cheaper guarantee than remembering not
+     * to make it.
      */
     fun readOnly(
         tossPackage: String,
         authPackage: String,
+        executionPackage: String,
     ): ArchRule =
         noClasses()
             .that()
             .resideInAPackage("$tossPackage..")
             .and()
             .resideOutsideOfPackage("$authPackage..")
+            .and()
+            .resideOutsideOfPackage("$executionPackage..")
             .should()
             .callMethodWhere(writesARequest)
-            .because("this project never places, modifies or cancels orders")
+            .because("orders are placed only by the execution module")
+
+    /** Every way to give a request a method that modifies or cancels rather than creates. */
+    private val NOT_CREATE = setOf("put", "patch", "delete", "method")
+
+    private val modifiesARequest =
+        object : DescribedPredicate<JavaMethodCall>("put, patch, delete or method on okhttp3.Request.Builder") {
+            override fun test(call: JavaMethodCall): Boolean =
+                call.targetOwner.name == "okhttp3.Request\$Builder" && call.name in NOT_CREATE
+        }
+
+    /**
+     * The execution module creates orders and nothing else: modifying and
+     * cancelling stay forbidden, and a module that can only POST cannot reach
+     * them by accident.
+     */
+    fun createsOnly(executionPackage: String): ArchRule =
+        noClasses()
+            .that()
+            .resideInAPackage("$executionPackage..")
+            .should()
+            .callMethodWhere(modifiesARequest)
+            .because("orders are never modified or cancelled by this project")
 }

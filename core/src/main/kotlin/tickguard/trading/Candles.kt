@@ -119,3 +119,31 @@ fun parseCandles(
 private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 private fun JsonObject.decimal(key: String): Decimal = Decimal.parse(checkNotNull(text(key)) { "$key is missing" }, key)
+
+/**
+ * Keeps [codes]' recent daily bars current in [store], for the sleeves'
+ * signals. Re-fetches from [from], which overlaps what is stored: a bar is
+ * replaced when fetched again, so a day's partial bar and a late adjustment
+ * both settle on the next run. Returns how many bars were written.
+ */
+suspend fun refreshBars(
+    rest: RestClient,
+    store: BarStore,
+    codes: Collection<String>,
+    from: LocalDate,
+): RefreshedBars {
+    var written = 0
+    val unreadable = ArrayList<String>()
+    for (code in codes) {
+        val fetched = fetchDailyBars(rest, code, from)
+        store.recordBars(fetched.bars)
+        written += fetched.bars.size
+        unreadable += fetched.unreadable
+    }
+    return RefreshedBars(written, unreadable)
+}
+
+data class RefreshedBars(
+    val written: Int,
+    val unreadable: List<String>,
+)

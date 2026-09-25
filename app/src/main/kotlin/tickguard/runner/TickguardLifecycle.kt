@@ -84,6 +84,7 @@ class TickguardLifecycle(
                     ScheduledTask("fallback", config.fallback.interval) { app.tasks.pollFallbackQuotes() },
                     ScheduledTask("news", config.intervals.news, immediate = true) { app.tasks.collectNews() },
                     dailyTask("calendar") { app.tasks.loadCalendars() },
+                    ScheduledTask("bars", config.intervals.bars, immediate = true) { app.tasks.refreshBars() },
                 ),
             scope = engine,
             onError = { error, task -> log.error("scheduled task {} failed: {}", task, reasonOf(error)) },

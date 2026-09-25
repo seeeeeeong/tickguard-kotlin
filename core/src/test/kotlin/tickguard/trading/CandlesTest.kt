@@ -74,4 +74,34 @@ class CandlesTest {
             assertThat(fetched.bars).hasSize(1)
             assertThat(fetched.unreadable).containsExactly("005930 2026-03-24T00:00:00+09:00: closePrice is missing")
         }
+
+    @Test
+    fun `refreshes each symbol's recent bars into the store, replacing what it fetches again`() =
+        runTest {
+            val stored = LinkedHashMap<Pair<String, LocalDate>, Bar>()
+            val store =
+                object : BarStore {
+                    override suspend fun recordBars(bars: List<Bar>) {
+                        bars.forEach { stored[it.code to it.day] = it }
+                    }
+
+                    override suspend fun bars(
+                        code: String,
+                        from: LocalDate,
+                        to: LocalDate,
+                    ) = stored.values.filter { it.code == code && it.day in from..to }
+                }
+            val rest = StubRest(page("2026-03-25", "2026-03-24", next = null))
+
+            val refreshed = refreshBars(rest, store, listOf("A", "B"), LocalDate.parse("2026-03-20"))
+            refreshBars(rest, store, listOf("A"), LocalDate.parse("2026-03-20"))
+
+            assertThat(refreshed).isEqualTo(RefreshedBars(written = 4, unreadable = emptyList()))
+            assertThat(
+                stored.keys.map {
+                    "${it.first} ${it.second}"
+                },
+            ).containsExactly("A 2026-03-24", "A 2026-03-25", "B 2026-03-24", "B 2026-03-25")
+            assertThat(rest.asked.map { it.query["symbol"] }).containsExactly("A", "B", "A")
+        }
 }

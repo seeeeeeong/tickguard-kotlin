@@ -39,10 +39,18 @@ import java.time.ZoneOffset
  *
  * A small pool rather than one connection: the database is across a network,
  * and a slow tick batch should not queue a cooldown write behind it.
+ *
+ * Cooldown and rejection writes are the exception. Their callers write behind,
+ * launching each write without waiting for the last, and rely on the store to
+ * apply them in the order made, as SQLite's single connection did by
+ * construction. Across a pool a delivery mark could run before the fire it
+ * marks, mark nothing, and leave a cooldown that does not survive a restart.
+ * Those writes run one at a time, in order, on [ordered].
  */
 class PostgresStore private constructor(
     private val pool: HikariDataSource,
     private val io: CoroutineDispatcher,
+    private val ordered: CoroutineDispatcher = io.limitedParallelism(1),
 ) : Store,
     OrderStore by PostgresOrders(pool, io) {
     override suspend fun firesSince(since: Instant): Map<String, Instant> =
@@ -63,6 +71,7 @@ class PostgresStore private constructor(
             signal.ruleId,
             signal.code,
             signal.firedAt,
+            on = ordered,
         )
     }
 
@@ -70,10 +79,11 @@ class PostgresStore private constructor(
         key: String,
         firedAt: Instant,
     ) {
-        update("UPDATE fires SET delivered = true WHERE key = ? AND fired_at = ?", key, firedAt)
+        update("UPDATE fires SET delivered = true WHERE key = ? AND fired_at = ?", key, firedAt, on = ordered)
     }
 
-    override suspend fun pruneFires(olderThan: Instant): Int = update("DELETE FROM fires WHERE fired_at < ?", olderThan)
+    override suspend fun pruneFires(olderThan: Instant): Int =
+        update("DELETE FROM fires WHERE fired_at < ?", olderThan, on = ordered)
 
     override suspend fun rejectedTopics(): List<String> =
         query("SELECT target FROM rejections ORDER BY rejected_at, target") { it.getString("target") }
@@ -91,11 +101,12 @@ class PostgresStore private constructor(
             target,
             code,
             at,
+            on = ordered,
         )
     }
 
     override suspend fun clearRejection(target: String) {
-        update("DELETE FROM rejections WHERE target = ?", target)
+        update("DELETE FROM rejections WHERE target = ?", target, on = ordered)
     }
 
     override suspend fun recentSignals(limit: Int): List<StoredSignal> =
@@ -306,11 +317,13 @@ class PostgresStore private constructor(
 
     override suspend fun close() = withContext(io) { pool.close() }
 
+    /** Blocking inside [on], not switching away from it, so an ordered write holds its turn until done. */
     private suspend fun update(
         sql: String,
         vararg values: Any,
+        on: CoroutineDispatcher = io,
     ): Int =
-        withContext(io) {
+        withContext(on) {
             pool.connection.use { db -> db.prepareStatement(sql.trimIndent()).use { it.bind(*values).executeUpdate() } }
         }
 

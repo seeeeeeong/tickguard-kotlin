@@ -149,17 +149,7 @@ class TickguardConfiguration {
         desk: SleeveDesk,
         orders: List<Order>,
         tags: Map<String, String>,
-    ) = ControlView(
-        trading = desk.describe(),
-        halted = desk.halted(),
-        now = Instant.now(),
-        windowEnd = desk.windowEnd(),
-        proposedAt = desk.proposedAt,
-        proposals = desk.proposals,
-        lastRun = desk.lastRun,
-        orders = orders,
-        tags = tags,
-    )
+    ) = ControlView(desk.state(), Instant.now(), orders, tags)
 
     /**
      * `tickguard.autostart=false` builds everything and starts nothing, for a

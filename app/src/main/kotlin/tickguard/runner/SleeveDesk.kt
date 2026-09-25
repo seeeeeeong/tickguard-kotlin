@@ -12,6 +12,7 @@ import tickguard.execution.Executor
 import tickguard.execution.OrderPlan
 import tickguard.execution.OrderRequest
 import tickguard.execution.inOrderWindow
+import tickguard.execution.orderWindow
 import tickguard.execution.orderWindowEnd
 import tickguard.execution.planOrders
 import tickguard.orders.Order
@@ -64,8 +65,12 @@ internal class SleeveDesk(
     @Volatile var proposedAt: Instant? = null
         private set
 
-    /** The last run's time and its report, for the control page. */
-    @Volatile var lastRun: Pair<Instant, String>? = null
+    /** The last run, for the control page. */
+    @Volatile var lastRun: LastRun? = null
+        private set
+
+    /** The rate the last proposal was priced at in won, for the control page. */
+    @Volatile var fx: Decimal = TestSleeves.FX
         private set
 
     @Volatile private var arming = Arming()
@@ -122,8 +127,22 @@ internal class SleeveDesk(
     fun ledger(): CompletableFuture<Pair<List<Order>, Map<String, String>>> =
         scope.future { store.ordersSince(TestSleeves.START) to store.orderTags() }
 
-    /** When the order window now open closes, or null while it is shut. */
-    fun windowEnd(): Instant? = orderWindowEnd(calendar.hours(Market.US), clock.instant())
+    /** Everything the control page shows about the desk, read at once. */
+    fun state(): DeskState {
+        val now = clock.instant()
+        return DeskState(
+            tradingOn = arming.enabled(trading.enabled),
+            stopped = arming.stopped,
+            halted = executor.halted,
+            modes = arming.modes(trading.modes, now),
+            liveUntil = arming.liveUntil?.takeIf { arming.isLive(now) },
+            window = orderWindow(calendar.hours(Market.US)),
+            proposedAt = proposedAt,
+            proposals = proposals,
+            lastRun = lastRun,
+            fx = fx,
+        )
+    }
 
     /** What the status page shows: off, the modes in effect, or why automated orders halted. */
     fun describe(): String {
@@ -153,9 +172,8 @@ internal class SleeveDesk(
         executedFor = made
         val plan = planOrders(proposals, arming.modes(trading.modes, now), LIMITS, LocalDate.ofInstant(made, SEOUL))
         val result = executor.run(plan)
-        val text = summary(plan, result)
-        lastRun = now to text
-        report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", text, now))
+        lastRun = LastRun(now, plan, result)
+        report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
         log.info(
             "execution: {} placed, {} refused, {} skipped, halted={}",
             result.placed.size,
@@ -215,6 +233,7 @@ internal class SleeveDesk(
         proposals = made
         proposedAt = clock.instant()
         val fx = fetchUsdKrw(rest)
+        this.fx = fx
         report(Signal(RULE_ID, "-", "$today 리밸런싱 제안", made.joinToString("\n\n") { text(it, fx) }, clock.instant()))
         log.info("rebalance: proposed {} trades across {} sleeves", made.sumOf { it.trades.size }, made.size)
     }
@@ -272,3 +291,26 @@ internal class SleeveDesk(
         const val TEST_WON = 300_000L
     }
 }
+
+/** A run of the plan, placed or listed, for the control page. */
+internal data class LastRun(
+    val at: Instant,
+    val plan: OrderPlan,
+    val result: ExecutionResult,
+)
+
+/** The desk as the control page sees it. */
+internal data class DeskState(
+    /** Configuration's kill switch on and not stopped from the page. */
+    val tradingOn: Boolean,
+    val stopped: Boolean,
+    val halted: String?,
+    /** Each sleeve's mode in effect, the page's LIVE included. */
+    val modes: Map<String, SleeveMode>,
+    val liveUntil: Instant?,
+    val window: ClosedRange<Instant>?,
+    val proposedAt: Instant?,
+    val proposals: List<SleeveProposal>,
+    val lastRun: LastRun?,
+    val fx: Decimal,
+)

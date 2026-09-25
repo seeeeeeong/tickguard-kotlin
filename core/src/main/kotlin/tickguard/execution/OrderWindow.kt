@@ -21,9 +21,17 @@ private val BEFORE_CLOSE = 1.hours.toJavaDuration()
 fun inOrderWindow(
     hours: MarketHours?,
     now: Instant,
-): Boolean =
-    hours?.sessions.orEmpty().any { session ->
-        session.name.endsWith("regularMarket") &&
-            !now.isBefore(session.from.plus(AFTER_OPEN)) &&
-            !now.isAfter(session.to.minus(BEFORE_CLOSE))
-    }
+): Boolean = orderWindowEnd(hours, now) != null
+
+/** When the order window [now] falls in closes, or null outside one. */
+fun orderWindowEnd(
+    hours: MarketHours?,
+    now: Instant,
+): Instant? =
+    hours
+        ?.sessions
+        .orEmpty()
+        .filter { it.name.endsWith("regularMarket") }
+        .firstOrNull { !now.isBefore(it.from.plus(AFTER_OPEN)) && !now.isAfter(it.to.minus(BEFORE_CLOSE)) }
+        ?.to
+        ?.minus(BEFORE_CLOSE)

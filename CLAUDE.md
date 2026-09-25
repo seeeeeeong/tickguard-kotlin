@@ -31,8 +31,9 @@ not a suggestion; the architecture tests enforce what they can.
 | Rule | Why |
 |---|---|
 | Only `POST /api/v1/orders`, only from `tickguard.execution` | One place to review, one place the architecture test allows a request body to an order path |
-| Modes per sleeve: `OFF` / `DRY_RUN` / `LIVE`. `LIVE` is set by the user in configuration | A person decides when money moves; `DRY_RUN` builds and reports orders without sending |
-| Kill switch `TICKGUARD_TRADING=off` stops every order at once | One line to stop everything, without a deploy |
+| Modes per sleeve: `OFF` / `DRY_RUN` / `LIVE`. `LIVE` is set by the user in configuration, or for one order window on `/control`, which only moves `DRY_RUN` to `LIVE` and is forgotten on restart | A person decides when money moves; `DRY_RUN` builds and reports orders without sending. A switch that outlived its evening would move money a month later |
+| Kill switch `TICKGUARD_TRADING=off` stops every order at once; `/control`'s stop does too, until restart | One line or one button to stop everything, without a deploy |
+| Control routes answer only with the `X-Tickguard-Control` header, and a Claude session never presses them | A form on another site can post to a tailnet address from the user's browser, but cannot set a header |
 | Hard limits: total automated capital, per-order value ≤ the sleeve's capital, orders per day, allowlisted symbols per sleeve, `MARKET` orders only; a sell never exceeds what the sleeve holds | A bug should cost at most the test's capital, never more |
 | Buys by `orderAmount` (USD), sells by fractional `quantity` (≤ 6 dp) | The API's rules for US fractional orders |
 | Only on a scheduled rebalance day, from ten minutes after the regular open to one hour before the close | Fractional and amount orders are accepted only then; the first minutes' spreads are wide |

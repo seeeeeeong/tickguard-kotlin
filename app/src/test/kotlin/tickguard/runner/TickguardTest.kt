@@ -393,6 +393,47 @@ class TickguardTest {
         }
 
     @Test
+    fun `runs a dry-run sleeve live only when a person presses LIVE, and not at all once stopped`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_A" to "DRY_RUN"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "리밸런싱 실행" in it && "· DRY_RUN A BUY SPY" in it } }
+                assertThat(orderPosts).isEmpty()
+
+                assertThat(app.sleeves.goLive()).isNull()
+                eventually { alerts.any { "리밸런싱 실행" in it && "✔ A BUY SPY" in it } }
+                assertThat(orderPosts).hasSize(5)
+                assertThat(app.sleeves.describe()).contains("A:LIVE").contains("LIVE until")
+
+                app.sleeves.stop()
+                assertThat(app.sleeves.goLive()).isEqualTo("trading is off")
+                withContext(engine.coroutineContext) {
+                    app.sleeves.propose(force = true)
+                    app.sleeves.execute()
+                }
+                assertThat(orderPosts).hasSize(5)
+                assertThat(app.sleeves.describe()).startsWith("STOPPED")
+
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
     fun `sends no order at all while the kill switch is off, whatever the sleeves' modes`() =
         runTest {
             withContext(Dispatchers.Default) {

@@ -1,16 +1,20 @@
 package tickguard.runner
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import tickguard.execution.Arming
 import tickguard.execution.ExecutionLimits
 import tickguard.execution.ExecutionResult
 import tickguard.execution.Executor
 import tickguard.execution.OrderPlan
 import tickguard.execution.OrderRequest
 import tickguard.execution.inOrderWindow
+import tickguard.execution.orderWindowEnd
 import tickguard.execution.planOrders
+import tickguard.orders.Order
 import tickguard.rest.RestClient
 import tickguard.rest.fetchUsdKrw
 import tickguard.rules.Signal
@@ -20,6 +24,7 @@ import tickguard.store.Store
 import tickguard.stream.Decimal
 import tickguard.time.SEOUL
 import tickguard.trading.LossAction
+import tickguard.trading.SleeveMode
 import tickguard.trading.SleeveProposal
 import tickguard.trading.TestSleeves
 import tickguard.trading.attribute
@@ -30,6 +35,8 @@ import java.time.Duration
 import java.time.Instant
 import java.time.InstantSource
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.CompletableFuture
 
 /**
  * The test sleeves, from the service's side: what each holds, from the order
@@ -37,7 +44,7 @@ import java.time.LocalDate
  * for the day's session. The proposals are kept for the execution module,
  * which places them in LIVE mode; until then a person does.
  */
-@Suppress("LongParameterList") // The desk's collaborators, each a separate concern it coordinates.
+@Suppress("LongParameterList", "TooManyFunctions") // Proposals, execution and the page's switches share one state.
 internal class SleeveDesk(
     private val store: Store,
     private val rest: RestClient,
@@ -54,7 +61,14 @@ internal class SleeveDesk(
         private set
 
     /** When [proposals] were made; they are placed once, in the next order window. */
-    @Volatile private var proposedAt: Instant? = null
+    @Volatile var proposedAt: Instant? = null
+        private set
+
+    /** The last run's time and its report, for the control page. */
+    @Volatile var lastRun: Pair<Instant, String>? = null
+        private set
+
+    @Volatile private var arming = Arming()
 
     @Volatile private var executedFor: Instant? = null
 
@@ -72,12 +86,54 @@ internal class SleeveDesk(
         }
     }
 
-    /** What the status page shows: off, the modes, or why automated orders halted. */
+    /**
+     * The control page's "LIVE tonight": runs the DRY_RUN sleeves live until
+     * this order window closes, then proposes and places at once. Refused, with
+     * the reason, outside a window, with trading off or stopped, after a halt,
+     * or with no sleeve in DRY_RUN: each a state in which pressing it would
+     * do something other than what the button says.
+     */
+    fun goLive(): String? {
+        val now = clock.instant()
+        val until = orderWindowEnd(calendar.hours(Market.US), now)
+        val refusal =
+            when {
+                !arming.enabled(trading.enabled) -> "trading is off"
+                executor.halted != null -> "halted"
+                until == null -> "outside the order window"
+                SleeveMode.DRY_RUN !in trading.modes.values -> "no sleeve in DRY_RUN"
+                else -> null
+            }
+        if (refusal == null) {
+            arming = arming.copy(liveUntil = until)
+            log.warn("control: DRY_RUN sleeves live until {}", until)
+            requestNow()
+        }
+        return refusal
+    }
+
+    /** The control page's stop: no order of any kind until the process restarts. */
+    fun stop() {
+        arming = Arming(stopped = true)
+        log.warn("control: trading stopped until restart")
+    }
+
+    /** The test's orders and their sleeves, for the control page, read on the engine like the rest. */
+    fun ledger(): CompletableFuture<Pair<List<Order>, Map<String, String>>> =
+        scope.future { store.ordersSince(TestSleeves.START) to store.orderTags() }
+
+    /** When the order window now open closes, or null while it is shut. */
+    fun windowEnd(): Instant? = orderWindowEnd(calendar.hours(Market.US), clock.instant())
+
+    /** What the status page shows: off, the modes in effect, or why automated orders halted. */
     fun describe(): String {
-        val modes = trading.modes.entries.joinToString(" ") { "${it.key}:${it.value}" }
+        val now = clock.instant()
+        val modes = arming.modes(trading.modes, now).entries.joinToString(" ") { "${it.key}:${it.value}" }
         return when {
             executor.halted != null -> "HALTED — ${executor.halted}"
+            arming.stopped -> "STOPPED until restart · $modes"
             !trading.enabled -> "off · $modes"
+            arming.isLive(now) -> "on · $modes · LIVE until ${clockTime(arming.liveUntil)}"
             else -> "on · $modes"
         }
     }
@@ -92,12 +148,14 @@ internal class SleeveDesk(
     suspend fun execute() {
         val made = proposedAt ?: return
         val now = clock.instant()
-        val due = trading.enabled && executedFor != made && Duration.between(made, now) <= STALE_AFTER
+        val due = arming.enabled(trading.enabled) && executedFor != made && Duration.between(made, now) <= STALE_AFTER
         if (!due || !inOrderWindow(calendar.hours(Market.US), now)) return
         executedFor = made
-        val plan = planOrders(proposals, trading.modes, LIMITS, LocalDate.ofInstant(made, SEOUL))
+        val plan = planOrders(proposals, arming.modes(trading.modes, now), LIMITS, LocalDate.ofInstant(made, SEOUL))
         val result = executor.run(plan)
-        report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
+        val text = summary(plan, result)
+        lastRun = now to text
+        report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", text, now))
         log.info(
             "execution: {} placed, {} refused, {} skipped, halted={}",
             result.placed.size,
@@ -130,6 +188,8 @@ internal class SleeveDesk(
         }
         return lines.ifEmpty { listOf("보낼 주문 없음") }.joinToString("\n")
     }
+
+    private fun clockTime(at: Instant?) = at?.let { CLOCK.format(it) }.orEmpty()
 
     private fun size(order: OrderRequest) =
         order.amount?.let { "\$${it.toPlainString()}" } ?: "${order.quantity?.toPlainString()}주"
@@ -182,6 +242,9 @@ internal class SleeveDesk(
 
     private companion object {
         val log: Logger = LoggerFactory.getLogger(SleeveDesk::class.java)
+
+        /** A window's close, as a person in Seoul reads it. */
+        val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm 'KST'").withZone(SEOUL)
 
         /** The signal's rule id: proposals are not a rule, and never cool down. */
         const val RULE_ID = "rebalance"

@@ -40,4 +40,12 @@ class OrderWindowTest {
         assertThat(inOrderWindow(hours, Instant.parse("2026-11-02T12:00:00Z"))).isFalse()
         assertThat(inOrderWindow(null, Instant.parse("2026-11-02T15:00:00Z"))).isFalse()
     }
+
+    @Test
+    fun `says when the window a moment falls in closes`() {
+        assertThat(orderWindowEnd(hours, Instant.parse("2026-11-02T15:00:00Z")))
+            .isEqualTo(Instant.parse("2026-11-02T20:00:00Z"))
+        assertThat(orderWindowEnd(hours, Instant.parse("2026-11-02T20:00:01Z"))).isNull()
+        assertThat(orderWindowEnd(null, Instant.parse("2026-11-02T15:00:00Z"))).isNull()
+    }
 }

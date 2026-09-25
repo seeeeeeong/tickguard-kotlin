@@ -137,6 +137,25 @@ an order. The first order whose outcome is unknown halts everything until a rest
 status page's `trading` line says why. The hard limits live in code, not configuration.
 `TICKGUARD_TRADING=off` and `docker compose up -d` stops all orders.
 
+### The control page
+
+`http://<tailnet address>:9464/control` shows the latest proposal, the last run's report and
+the test's orders with their sleeves, and has three buttons:
+
+| Button | Does | Lasts |
+|---|---|---|
+| 제안 요청 | Proposes now; places if trading is on and the window open | — |
+| 오늘 밤만 LIVE | Runs the `DRY_RUN` sleeves as `LIVE`, then proposes and places at once. Refused outside the window, with trading off, or after a halt; an `OFF` sleeve stays off | Until this window closes, or a restart |
+| 긴급 중지 | No order of any kind. Orders already sent are not cancelled | Until a restart |
+
+Nothing the page switches survives a restart: `.env` stays the durable setting, so a
+forgotten switch cannot move money next month. Each button sends an `X-Tickguard-Control: 1`
+header, which a form on another site cannot, so from a shell:
+
+```bash
+curl -X POST -H 'X-Tickguard-Control: 1' http://<tailnet address>:9464/sleeves/rebalance
+```
+
 ## Cutting over from the original
 
 The two services share a database schema, so the history moves with the service: recorded

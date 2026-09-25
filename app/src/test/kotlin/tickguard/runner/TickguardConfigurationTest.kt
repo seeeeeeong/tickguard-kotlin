@@ -43,6 +43,28 @@ class TickguardConfigurationTest
             assertThat(lifecycle.isRunning).isFalse()
         }
 
+        @Test
+        fun `serves the control page, and refuses a button press without the control header`() {
+            val client = HttpClient.newHttpClient()
+            val page =
+                client.send(
+                    HttpRequest.newBuilder(URI("http://127.0.0.1:$port/control")).build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            val bare =
+                client.send(
+                    HttpRequest
+                        .newBuilder(URI("http://127.0.0.1:$port/sleeves/rebalance"))
+                        .POST(HttpRequest.BodyPublishers.noBody())
+                        .build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+
+            assertThat(page.statusCode()).isEqualTo(200)
+            assertThat(page.body()).contains("tickguard 제어").contains("off · A:OFF B:OFF C:OFF")
+            assertThat(bare.statusCode()).isEqualTo(403)
+        }
+
         companion object {
             @JvmStatic
             @DynamicPropertySource

@@ -28,3 +28,16 @@ fun <T> Connection.rows(
 
 /** A nullable INTEGER, REAL or TEXT column, as SQLite gave it. */
 fun ResultSet.nullable(column: String): Any? = getObject(column)
+
+/** A SQLite table's column names, to read a file an older version wrote. */
+fun Connection.columns(table: String): List<String> = rows("PRAGMA table_info($table)") { it.getString("name") }
+
+/** Rows per table in [tables], optionally qualified by a Postgres [schema]. */
+fun Connection.counts(
+    tables: List<String> = TABLES,
+    schema: String? = null,
+): Map<String, Int> =
+    tables.associateWith { table ->
+        val name = if (schema == null) table else "$schema.$table"
+        rows("SELECT count(*) AS n FROM $name") { it.getInt("n") }.single()
+    }

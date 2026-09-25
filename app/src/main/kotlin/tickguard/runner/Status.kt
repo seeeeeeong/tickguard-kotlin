@@ -46,6 +46,10 @@ internal fun statusPanels(
             )
         },
         StatusPanel("decode dropped", "$decodeDropped", ok = decodeDropped == 0L),
+        with(app.counters) {
+            val unreadable = orderUnreadable.get()
+            StatusPanel("orders", "${orderEvents.get()} events · $unreadable unreadable", ok = unreadable == 0L)
+        },
         StatusPanel(
             "queue",
             "${s.inbox.queued.getValue(Lane.QUOTES)} / max ${s.inbox.maxQueued.getValue(Lane.QUOTES)}",
@@ -208,8 +212,19 @@ internal fun registerMetrics(
     }
     registerNewsMetrics(app, metrics)
     registerRecordingMetrics(app, metrics)
+    registerOrderMetrics(app, metrics)
     metrics.fromStats("tickguard.ratelimit", "REST limiter.", counter = true) {
         with(app.snapshot.limiter) { mapOf("waits" to waits, "totalWaitMs" to totalWait.inWholeMilliseconds) }
+    }
+}
+
+private fun registerOrderMetrics(
+    app: Tickguard,
+    metrics: Metrics,
+) {
+    metrics.counter("tickguard.orders.events", "Order events read.") { app.counters.orderEvents.get() }
+    metrics.counter("tickguard.orders.unreadable", "Order events that could not be read.") {
+        app.counters.orderUnreadable.get()
     }
 }
 

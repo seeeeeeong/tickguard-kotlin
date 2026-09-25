@@ -26,6 +26,10 @@ internal class Counters {
     val opens = AtomicLong()
     val ticks = AtomicLong()
     val decodeDropped = AtomicLong()
+    val orderEvents = AtomicLong()
+
+    /** Order events that could not be read. Unlike a dropped tick, each one is an event lost for good. */
+    val orderUnreadable = AtomicLong()
     val signals = AtomicLong()
     val incidents = AtomicLong()
 }

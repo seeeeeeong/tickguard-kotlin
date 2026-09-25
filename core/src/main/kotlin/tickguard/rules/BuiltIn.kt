@@ -35,7 +35,11 @@ fun drawdownFromAverage(
     val percent = (Decimal.parse(fraction, "fraction") * Decimal.HUNDRED).toPlainString()
 
     return rule("drawdown-${percent}pct", holdFor, cooldown) { context ->
-        val position = context.position ?: return@rule null
+        val position =
+            context.position ?: run {
+                context.decline(DeclineReason.NO_POSITION)
+                return@rule null
+            }
         val trade = context.trade
 
         val threshold = position.averagePrice * remaining
@@ -104,7 +108,10 @@ fun rapidMove(
         val recent = context.window(window)
         val spanMs = recent?.span?.inWholeMilliseconds ?: 0
         // At least two prints, and half the span: the least that makes the answer meaningful.
-        if (recent == null || recent.count < 2 || spanMs * 2 < windowMs) return@rule null
+        if (recent == null || recent.count < 2 || spanMs * 2 < windowMs) {
+            context.decline(DeclineReason.INSUFFICIENT_SPAN)
+            return@rule null
+        }
 
         val moved = changeRatio(recent.open, recent.last)
         if (moved.abs() < magnitude) return@rule null

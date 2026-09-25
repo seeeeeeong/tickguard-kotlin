@@ -32,10 +32,12 @@ class BuiltInTest {
     ) = Position(code, decimal(averagePrice), decimal("10"))
 
     @Test
-    fun `drawdown stays quiet for a symbol that is not held`() {
-        engine(drawdownFromAverage("0.07", holdFor = Duration.ZERO)).evaluate(tick("005930", "1"))
+    fun `drawdown stays quiet for a symbol that is not held, and says why`() {
+        val engine = engine(drawdownFromAverage("0.07", holdFor = Duration.ZERO))
+        engine.evaluate(tick("005930", "1"))
 
         assertThat(signals).isEmpty()
+        assertThat(engine.stats().declined).containsEntry(DeclineReason.NO_POSITION, 1)
     }
 
     @Test
@@ -75,12 +77,13 @@ class BuiltInTest {
     private fun rapid(
         maxPoints: Int = 2_000,
         feed: (feed: (price: String, atMs: Long) -> Unit) -> Unit,
-    ) {
+    ): RuleEngine {
         val engine = engine(rapidMove("0.03", 5.minutes), windows = WindowStore(maxPoints = maxPoints))
         feed { price, atMs ->
             now = atMs
             engine.evaluate(tick("AAPL", price, at = Instant.ofEpochMilli(atMs)))
         }
+        return engine
     }
 
     @Test
@@ -101,12 +104,23 @@ class BuiltInTest {
     @Test
     fun `rapid move declines when the retained history does not cover the span`() {
         // Two ticks two seconds apart is not an answer to a five minute question.
-        rapid { feed ->
-            feed("100", 0)
-            feed("90", 2_000)
-        }
+        val engine =
+            rapid { feed ->
+                feed("100", 0)
+                feed("90", 2_000)
+            }
 
         assertThat(signals).isEmpty()
+        assertThat(engine.stats().declined).containsEntry(DeclineReason.INSUFFICIENT_SPAN, 2)
+    }
+
+    @Test
+    fun `counts no decline when a rule could answer and the condition simply does not hold`() {
+        val engine =
+            engine(drawdownFromAverage("0.07", holdFor = Duration.ZERO), mapOf("TSLA" to held("TSLA", "100")))
+        engine.evaluate(tick("TSLA", "99"))
+
+        assertThat(engine.stats().declined.values).allMatch { it == 0 }
     }
 
     /** Four minutes of prints a second apart, then a 10% drop. */

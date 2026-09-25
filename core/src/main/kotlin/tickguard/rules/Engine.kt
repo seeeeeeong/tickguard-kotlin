@@ -44,6 +44,8 @@ data class RuleEngineStats(
     val trackedKeys: Int,
     /** Cooldowns given back because their alert was never delivered. */
     val released: Int = 0,
+    /** Evaluations a rule could not answer, per reason. */
+    val declined: Map<DeclineReason, Int> = DeclineReason.entries.associateWith { 0 },
 )
 
 /**
@@ -101,6 +103,7 @@ class RuleEngine(
     private var pending = 0
     private var errors = 0
     private var released = 0
+    private val declined = DeclineReason.entries.associateWith { 0 }.toMutableMap()
 
     /**
      * Seeds cooldowns from the store. Must finish before the first tick, or a
@@ -122,6 +125,7 @@ class RuleEngine(
                 now = clock.instant(),
                 position = positions()[trade.code],
                 window = { span -> windows?.snapshot(trade.code, span) },
+                decline = { reason -> declined[reason] = declined.getValue(reason) + 1 },
             )
         evaluated += 1
 
@@ -144,6 +148,7 @@ class RuleEngine(
             errors = errors,
             trackedKeys = (lastFiredAt.keys + pendingSince.keys).size,
             released = released,
+            declined = declined.toMap(),
         )
 
     private fun runRule(

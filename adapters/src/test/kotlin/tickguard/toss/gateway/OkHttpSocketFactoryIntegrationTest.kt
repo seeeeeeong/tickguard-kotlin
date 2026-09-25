@@ -181,10 +181,10 @@ class OkHttpSocketFactoryIntegrationTest {
                     )
 
                 eventually { blocked.size == 1 }
-                delay(200)
+                // Several retries, however long a loaded machine takes to make them:
+                // a fixed wait here failed when the whole build ran at once.
+                eventually { requests.get() > 3 }
                 supervisor.stop()
-
-                assertThat(requests.get()).isGreaterThan(3)
                 // The attempt in flight at stop() may not have ended yet.
                 eventually { accepted.get() - endedByClient.get() <= 1 }
             }

@@ -77,10 +77,37 @@ abstract class StoreContract {
         code: String = "005930",
     ) = Signal("drawdown-7pct", code, "t", "d", at(firedAtMs))
 
+    private suspend fun Handle.deliveredFire(
+        key: String,
+        signal: Signal,
+    ) {
+        store.recordFire(key, signal)
+        store.markDelivered(key, signal.firedAt)
+    }
+
+    @Test
+    fun `does not count a fire as suppressing until its alert was delivered`() =
+        contract { h ->
+            h.store.recordFire("k", signal(1_000))
+            h.restart()
+
+            assertThat(h.store.firesSince(at(0))).isEmpty()
+        }
+
+    @Test
+    fun `leaves a newer fire undelivered when an older one is marked`() =
+        contract { h ->
+            h.store.recordFire("k", signal(1_000))
+            h.store.recordFire("k", signal(2_000))
+            h.store.markDelivered("k", at(1_000))
+
+            assertThat(h.store.firesSince(at(0))).isEmpty()
+        }
+
     @Test
     fun `fires and rejections survive a restart`() =
         contract { h ->
-            h.store.recordFire("k", signal(1_000))
+            h.deliveredFire("k", signal(1_000))
             h.store.recordRejection("trade:us:NOPE", "stock-not-found", at(500))
             h.restart()
 
@@ -91,8 +118,8 @@ abstract class StoreContract {
     @Test
     fun `keeps only the latest fire for a key`() =
         contract { h ->
-            h.store.recordFire("k", signal(1_000))
-            h.store.recordFire("k", signal(2_000))
+            h.deliveredFire("k", signal(1_000))
+            h.deliveredFire("k", signal(2_000))
 
             assertThat(h.store.firesSince(at(0))).containsExactlyEntriesOf(mapOf("k" to at(2_000)))
             assertThat(h.store.recentSignals(10)).hasSize(1)
@@ -101,8 +128,8 @@ abstract class StoreContract {
     @Test
     fun `reads only fires recent enough to still suppress`() =
         contract { h ->
-            h.store.recordFire("old", signal(1_000))
-            h.store.recordFire("new", signal(9_000))
+            h.deliveredFire("old", signal(1_000))
+            h.deliveredFire("new", signal(9_000))
 
             assertThat(h.store.firesSince(at(5_000))).containsExactlyEntriesOf(mapOf("new" to at(9_000)))
         }
@@ -110,8 +137,8 @@ abstract class StoreContract {
     @Test
     fun `drops fires that can no longer suppress anything`() =
         contract { h ->
-            h.store.recordFire("old", signal(1_000))
-            h.store.recordFire("new", signal(9_000))
+            h.deliveredFire("old", signal(1_000))
+            h.deliveredFire("new", signal(9_000))
 
             assertThat(h.store.pruneFires(at(5_000))).isEqualTo(1)
             assertThat(h.store.firesSince(at(0)).keys).containsExactly("new")
@@ -150,6 +177,7 @@ abstract class StoreContract {
     private suspend fun fireOnce(
         store: Store,
         clockMs: Long,
+        delivered: Boolean = true,
     ): List<Signal> {
         val signals = mutableListOf<Signal>()
         val writes = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -163,6 +191,7 @@ abstract class StoreContract {
             )
         engine.load()
         engine.evaluate(tick("005930", "100"))
+        if (delivered) signals.forEach { engine.delivered(checkNotNull(it.cooldownKey), it.firedAt) }
         writes.coroutineContext.job.children
             .toList()
             .joinAll()
@@ -178,6 +207,15 @@ abstract class StoreContract {
             h.restart()
 
             assertThat(fireOnce(h.store, 10_000)).isEmpty()
+        }
+
+    @Test
+    fun `fires again after a restart when the alert never went out`() =
+        contract { h ->
+            fireOnce(h.store, 0, delivered = false)
+            h.restart()
+
+            assertThat(fireOnce(h.store, 10_000)).hasSize(1)
         }
 
     @Test

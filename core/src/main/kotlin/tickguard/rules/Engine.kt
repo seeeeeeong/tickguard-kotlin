@@ -15,11 +15,19 @@ import kotlin.time.toJavaDuration
  * what it knows lives in memory; the store only carries it across restarts.
  */
 interface CooldownStore {
+    /** Delivered fires at or after [since]. An undelivered one never told anyone, so it seeds nothing. */
     suspend fun firesSince(since: Instant): Map<String, Instant>
 
+    /** Recorded when the rule fires, as not yet delivered. */
     suspend fun recordFire(
         key: String,
         signal: Signal,
+    )
+
+    /** The fire's alert reached someone. A newer fire under the same key is left as it is. */
+    suspend fun markDelivered(
+        key: String,
+        firedAt: Instant,
     )
 
     suspend fun pruneFires(olderThan: Instant): Int
@@ -34,6 +42,8 @@ data class RuleEngineStats(
     val errors: Int,
     /** Live cooldown entries. Growth here means keys are too specific. */
     val trackedKeys: Int,
+    /** Cooldowns given back because their alert was never delivered. */
+    val released: Int = 0,
 )
 
 /**
@@ -51,6 +61,13 @@ data class RuleEngineStats(
  *
  * Both are keyed per rule *and* per dedupe key, so one noisy symbol cannot
  * silence a different one.
+ *
+ * A cooldown only means something once its alert went out. A fire is stored
+ * as undelivered; delivery marks it, and only delivered fires survive a
+ * restart. An abandoned delivery releases the cooldown, so the next
+ * qualifying tick fires again rather than the rule staying quiet for an hour
+ * about something nobody heard. Alertmanager's notification log records a
+ * notification only once it was sent, for the same reason.
  *
  * Runs on the engine, like everything that touches this state. A rule that
  * blocks holds the engine, so rules are expected to be arithmetic.
@@ -83,6 +100,7 @@ class RuleEngine(
     private var suppressed = 0
     private var pending = 0
     private var errors = 0
+    private var released = 0
 
     /**
      * Seeds cooldowns from the store. Must finish before the first tick, or a
@@ -125,6 +143,7 @@ class RuleEngine(
             pending = pending,
             errors = errors,
             trackedKeys = (lastFiredAt.keys + pendingSince.keys).size,
+            released = released,
         )
 
     private fun runRule(
@@ -150,13 +169,32 @@ class RuleEngine(
             return
         }
 
-        val signal = Signal(rule.id, outcome.code, outcome.title, outcome.detail, context.now)
+        val signal = Signal(rule.id, outcome.code, outcome.title, outcome.detail, context.now, cooldownKey = key)
         pendingSince -= key
         lastFiredAt[key] = context.now
         persist { recordFire(key, signal) }
         fired += 1
         prune(context.now)
         onSignal(signal)
+    }
+
+    /** The fire's alert went out: only now does its cooldown outlive a restart. */
+    fun delivered(
+        key: String,
+        firedAt: Instant,
+    ) = persist { markDelivered(key, firedAt) }
+
+    /**
+     * The fire's alert never went out: give its cooldown back. A newer fire
+     * under the same key keeps its own.
+     */
+    fun release(
+        key: String,
+        firedAt: Instant,
+    ) {
+        if (lastFiredAt[key] != firedAt) return
+        lastFiredAt -= key
+        released += 1
     }
 
     /**

@@ -40,6 +40,12 @@ data class Signal(
     val title: String,
     val detail: String,
     val firedAt: Instant,
+    /**
+     * The cooldown this fire started, for signals raised by the rule engine.
+     * Delivery reports back against it: a fire that reached nobody must not
+     * keep its rule quiet.
+     */
+    val cooldownKey: String? = null,
 )
 
 /** What a rule says when its condition holds. The engine adds the rule and the time. */

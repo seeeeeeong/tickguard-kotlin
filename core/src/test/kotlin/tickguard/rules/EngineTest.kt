@@ -191,6 +191,7 @@ class EngineTest {
                     scope = backgroundScope,
                 )
             first.evaluate(tick("005930", "100"))
+            first.delivered(signals.single().cooldownKey!!, signals.single().firedAt)
             runCurrent()
 
             advance(500.milliseconds)
@@ -209,6 +210,59 @@ class EngineTest {
             assertThat(signals).hasSize(1)
             assertThat(restarted.stats().suppressed).isEqualTo(1)
         }
+
+    @Test
+    fun `does not seed a restart with a fire whose alert never went out`() =
+        runTest {
+            val store = MemoryCooldowns()
+            val engine = {
+                RuleEngine(
+                    listOf(always),
+                    clock = clock,
+                    onSignal = { signals += it },
+                    cooldowns = store,
+                    scope = backgroundScope,
+                )
+            }
+            engine().evaluate(tick("005930", "100"))
+            runCurrent()
+
+            // Crashed during the group wait: nothing was delivered.
+            advance(500.milliseconds)
+            val restarted = engine()
+            restarted.load()
+            restarted.evaluate(tick("005930", "100"))
+
+            assertThat(signals).hasSize(2)
+        }
+
+    @Test
+    fun `gives a cooldown back when its alert was abandoned, so the rule can fire again`() {
+        val engine = engine(always)
+        engine.evaluate(tick("005930", "100"))
+        val fired = signals.single()
+
+        engine.release(fired.cooldownKey!!, fired.firedAt)
+        engine.evaluate(tick("005930", "100"))
+
+        assertThat(signals).hasSize(2)
+        assertThat(engine.stats().released).isEqualTo(1)
+    }
+
+    @Test
+    fun `keeps a newer fire's cooldown when an older one is released`() {
+        val engine = engine(always)
+        engine.evaluate(tick("005930", "100"))
+        val older = signals.single()
+        advance(2.seconds)
+        engine.evaluate(tick("005930", "100"))
+
+        engine.release(older.cooldownKey!!, older.firedAt)
+        engine.evaluate(tick("005930", "100"))
+
+        assertThat(signals).hasSize(2)
+        assertThat(engine.stats().released).isZero()
+    }
 
     @Test
     fun `keeps suppressing in memory when the store fails`() =
@@ -250,8 +304,20 @@ class EngineTest {
 
     private class MemoryCooldowns : CooldownStore {
         val fires = LinkedHashMap<String, Instant>()
+        private val delivered = mutableSetOf<Pair<String, Instant>>()
 
-        override suspend fun firesSince(since: Instant) = fires.filterValues { it >= since }
+        override suspend fun firesSince(since: Instant) =
+            fires.filter { (key, at) ->
+                at >= since &&
+                    key to at in delivered
+            }
+
+        override suspend fun markDelivered(
+            key: String,
+            firedAt: Instant,
+        ) {
+            delivered += key to firedAt
+        }
 
         override suspend fun recordFire(
             key: String,
@@ -273,6 +339,11 @@ class EngineTest {
         override suspend fun recordFire(
             key: String,
             signal: Signal,
+        ): Unit = error("disk full")
+
+        override suspend fun markDelivered(
+            key: String,
+            firedAt: Instant,
         ): Unit = error("disk full")
 
         override suspend fun pruneFires(olderThan: Instant): Int = error("disk full")

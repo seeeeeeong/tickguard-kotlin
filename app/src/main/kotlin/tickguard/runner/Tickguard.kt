@@ -159,6 +159,14 @@ class Tickguard(
                     config.slackWebhookUrl?.let { SlackChannel(it, http) },
                 ),
             scope = engine,
+            // A rule's cooldown holds only once its alert reached someone; an
+            // abandoned one gives it back so the rule can fire again.
+            onSettled = { notification, delivered ->
+                for (signal in notification.signals) {
+                    val key = signal.cooldownKey ?: continue
+                    if (delivered) rules.delivered(key, signal.firedAt) else rules.release(key, signal.firedAt)
+                }
+            },
         )
     private val grouper = Grouper(engine, { notifier.notify(toNotification(it)) }, config.groupWait)
 

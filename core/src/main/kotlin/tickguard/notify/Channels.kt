@@ -29,7 +29,7 @@ fun formatSignal(signal: Signal): String =
  * in a channel is how the original's first live run produced two timestamps
  * on one line.
  */
-fun toNotification(group: SignalGroup) = Notification(group.key, formatGroup(group))
+fun toNotification(group: SignalGroup) = Notification(group.key, formatGroup(group), group.signals)
 
 fun formatGroup(group: SignalGroup): String {
     val first = group.signals.first()

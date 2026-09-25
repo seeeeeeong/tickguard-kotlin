@@ -139,16 +139,16 @@ status page's `trading` line says why. The hard limits live in code, not configu
 
 ### The control page
 
-`http://<tailnet address>:9464/control` walks an evening in four steps (propose, dry run,
-real orders, fills) and shows one card: what to do now, with the one button that does it.
-A button that would be refused is shown disabled with the reason. Below it, each sleeve's
-trades in dollars and won, and the test's orders with their sleeve and fill.
+`http://<tailnet address>:9464/control` is laid out like a brokerage's order screen: the
+amount to buy in won, each sleeve's stocks under it, and one button at the bottom. The dry
+run stays out of sight; the button says when buying opens until the dry run has listed the
+orders in the window, then offers to buy them.
 
 | Button | Does | Lasts |
 |---|---|---|
-| 주문 목록 받기 | Proposes now; places if trading is on and the window open | — |
-| 실제 주문 N건 넣기 | After a dry run in the window: runs the `DRY_RUN` sleeves as `LIVE`, then proposes and places at once. Asks for `실제 주문` to be typed first; an `OFF` sleeve stays off | Until this window closes, or a restart |
-| 긴급 중지 | At the bottom throughout. No order of any kind; orders already sent are not cancelled | Until a restart |
+| 오늘 주문 목록 불러오기 | Proposes now; places if trading is on and the window open | — |
+| N원 구매하기 → 구매하기 | Runs the `DRY_RUN` sleeves as `LIVE`, then proposes and places at once. An `OFF` sleeve stays off | Until this window closes, or a restart |
+| 중지 (top right) → 멈추기 | No order of any kind; orders already sent are not cancelled | Until a restart |
 
 Nothing the page switches survives a restart: `.env` stays the durable setting, so a
 forgotten switch cannot move money next month. Each button sends an `X-Tickguard-Control: 1`

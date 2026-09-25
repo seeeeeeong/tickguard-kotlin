@@ -92,73 +92,65 @@ class ControlPageTest {
     }
 
     @Test
-    fun `before the window, says when the dry run comes and offers no order button`() {
+    fun `before the window, says when buying opens and offers no buy button`() {
         val page = renderControl(ControlView(desk(proposedAt = evening), evening, emptyList(), emptyMap()))
 
-        assertThat(page).contains("22:40에 모의 실행이 자동으로 됩니다").contains("1시간 55분 남음")
-        assertThat(page).contains("<button class=\"primary\" disabled>실제 주문은 22:40부터</button>")
-        assertThat(page).doesNotContain("openConfirm()\">")
+        assertThat(page).contains("22:40부터 살 수 있어요 · 1시간 55분 남음")
+        assertThat(page).contains("<button class=\"primary\" disabled>22:40부터 구매할 수 있어요</button>")
+        assertThat(page).doesNotContain("원 구매하기").doesNotContain("id=\"buy\"")
+        assertThat(page).contains("연습 모드").contains("안정형").contains("미국 S&amp;P 500")
     }
 
     @Test
-    fun `after a dry run in the window, offers the orders with their total in won`() {
+    fun `after a dry run in the window, offers to buy the total in won`() {
         val page =
             renderControl(
                 ControlView(desk(proposedAt = evening, lastRun = dryRun(inWindow)), inWindow, emptyList(), emptyMap()),
             )
 
-        assertThat(page).contains("1건 · 매수 \$30.69 (약 42,966원) · 건너뜀 0건 · 주문 가능 04:00까지")
-        assertThat(page).contains("실제 주문 1건 넣기").contains("매수 SPY").contains("모의")
+        assertThat(page).contains("42,966<small>원</small>").contains("\$30.69 · 1개 종목")
+        assertThat(page).contains("지금 살 수 있어요 · 04:00까지").contains("42,966원 구매하기")
+        assertThat(page).contains("<h2>42,966원 구매할까요?</h2>").contains("안정형 · 1종목")
     }
 
     @Test
-    fun `lists orders with their sleeve, a person's own untagged, and escapes what the broker sent`() {
+    fun `after placing, marks each stock with its fill`() {
         val filled = Execution(d("0.046"), d("663.2"), null, null, null, null)
-        val orders =
-            listOf(
-                Order(
-                    "o-1",
-                    "SPY",
-                    "BUY",
-                    "MARKET",
-                    "DAY",
-                    "FILLED",
-                    null,
-                    d("0.046"),
-                    d("30.69"),
-                    "USD",
-                    inWindow,
-                    null,
-                    filled,
-                ),
-                Order(
-                    "o-2",
-                    "<b>X</b>",
-                    "SELL",
-                    "LIMIT",
-                    "DAY",
-                    "PENDING",
-                    d("1"),
-                    d("2"),
-                    null,
-                    "USD",
-                    inWindow,
-                    null,
-                    filled,
-                ),
+        val order =
+            Order(
+                "o-1",
+                "SPY",
+                "BUY",
+                "MARKET",
+                "DAY",
+                "FILLED",
+                null,
+                d("0.046"),
+                d("30.69"),
+                "USD",
+                inWindow,
+                null,
+                filled,
             )
         val page =
             renderControl(
                 ControlView(
                     desk(proposedAt = inWindow, lastRun = liveRun(inWindow)),
                     inWindow,
-                    orders,
+                    listOf(order),
                     mapOf("o-1" to "A"),
                 ),
             )
 
-        assertThat(page).contains("접수 1/1 · 체결 1/1")
-        assertThat(page).contains("<b>SPY</b> 매수 \$30.69").contains("A · 22:45 · 0.046주 @ \$663.2").contains(">체결<")
-        assertThat(page).contains("개인 · 22:45").contains("&lt;b&gt;X&lt;/b&gt;").doesNotContain("<b><b>X</b></b>")
+        assertThat(page).contains("오늘 주문한 금액").contains("모두 체결됐어요").contains("체결 · 0.046주")
+        assertThat(page).contains("<button class=\"primary\" disabled>주문 완료</button>")
+    }
+
+    @Test
+    fun `says a halt in plain words, and escapes what it quotes`() {
+        val page = renderControl(ControlView(desk(halted = "<b>tg-1</b>: 503"), evening, emptyList(), emptyMap()))
+
+        assertThat(page).contains("자동 주문이 멈췄어요").contains("&lt;b&gt;tg-1&lt;/b&gt;: 503").doesNotContain("<b>tg-1</b>")
+        assertThat(page).doesNotContain("openSheet('stop')")
     }
 }

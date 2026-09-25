@@ -98,6 +98,34 @@ TICKGUARD_TAG=<commit> docker compose up -d         # roll back to a commit
 - **Exit status 143 after a stop is normal.** It is the JVM's answer to SIGTERM, after the
   graceful shutdown has run; `restart: unless-stopped` does not treat it as a crash.
 
+## Cutting over from the original
+
+The two services share a database schema, so the history moves with the service: recorded
+ticks for backtests, cooldowns, stories and verdicts. They share a client too, so they
+never run at the same time.
+
+1. **Stop the original** and confirm nothing else holds the client (the laptop's `pc`
+   entry, a probe). A second copy revokes the first one's token within a minute.
+2. **Snapshot its database** with `sqlite3 tickguard.db ".backup snap.db"`, not `cp`: it
+   runs in WAL mode and a plain copy of a live file can be torn.
+3. **Put it in place** as `data/tickguard.db`, owned by uid 10001. The first start adds
+   the columns it needs; nothing is rewritten.
+4. **Register the server's address** in WTS (Settings → Open API → allowed IPs) and check
+   it digit by digit. A typo reads exactly like an unregistered address.
+5. **Start and verify**: `docker compose up -d`, then the status page: `startup ready`,
+   `stream connected …`, `subscribed` equal to the holdings, `ticks` rising.
+
+### Rolling back
+
+- **To an earlier image:** `TICKGUARD_TAG=<commit> docker compose up -d`.
+- **To the original:** `docker compose stop`, snapshot `data/tickguard.db` the same way,
+  put it where the original reads it, and start it from a registered address. It reads
+  this port's database: it names its columns, and the added `delivered` column defaults to
+  delivered. Two differences remain. An alert that was never delivered holds its
+  cooldown there, as it always did in the original. A drawdown keyed by depth
+  (`AMZN:2`) is not a key the original knows, so a drawdown still in progress may alert
+  once more after the switch.
+
 ## Development
 
 JDK 21 (downloaded by Gradle if missing).

@@ -13,6 +13,9 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Primary
 import org.springframework.core.env.Environment
+import org.springframework.web.servlet.function.RouterFunction
+import org.springframework.web.servlet.function.ServerResponse
+import org.springframework.web.servlet.function.router
 import tickguard.network.reasonOf
 import tickguard.observability.Metrics
 import tickguard.observability.StatusSource
@@ -79,6 +82,22 @@ class TickguardConfiguration {
     @Bean
     @Primary
     fun tickguardStatus(app: Tickguard): StatusSource = StatusSource { statusPanels(app, Instant.now()) }
+
+    /**
+     * `POST /sleeves/rebalance`: propose now and, if trading is on and the
+     * order window open, place. Reachable only where the status page is, the
+     * tailnet; with the kill switch off it proposes and lists, and sends nothing.
+     */
+    @Bean
+    fun sleeveRoutes(app: Tickguard): RouterFunction<ServerResponse> =
+        router {
+            POST("/sleeves/rebalance") {
+                app.sleeves.requestNow()
+                ServerResponse.accepted().body(
+                    "rebalance requested: proposal to Discord; orders only if trading is on and the window open\n",
+                )
+            }
+        }
 
     /**
      * `tickguard.autostart=false` builds everything and starts nothing, for a

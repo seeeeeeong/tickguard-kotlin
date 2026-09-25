@@ -43,5 +43,7 @@ jobs:
           tags: |
             ghcr.io/seeeeeeong/tickguard-kotlin:main
             ghcr.io/seeeeeeong/tickguard-kotlin:${{ github.sha }}
+          # The commit inside the image, so a deploy can check it pulled what it meant to.
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

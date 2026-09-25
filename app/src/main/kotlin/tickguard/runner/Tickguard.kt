@@ -267,7 +267,8 @@ class Tickguard(
             fetchPrices = { fetchPrices(rest, it) },
             symbols = { fallbackSymbols(holdings.current().markets, config.extraSymbols) },
             isMarketOpen = calendar::isOpen,
-            streamSilentFor = { (clock.millis() - lastQuoteAt.toEpochMilli()).milliseconds },
+            // A symbol that never ticked has been silent since the process could have heard it.
+            silentFor = { code -> (clock.millis() - (lastSeen[code]?.at ?: startedAt).toEpochMilli()).milliseconds },
             paused = { link.blockedSince != null },
             onQuote = { restJudging.evaluate(it, rules) },
             lastStreamedAt = { lastSeen[it]?.at },

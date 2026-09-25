@@ -31,7 +31,7 @@ class RestQuoteFallbackTest {
         },
         symbols = { listOf(AMZN, SAMSUNG) },
         isMarketOpen = { market, _ -> market in open },
-        streamSilentFor = { silentFor },
+        silentFor = { silentFor },
         paused = { paused },
         onQuote = { quotes += it },
         clock = InstantSource.fixed(Instant.ofEpochMilli(1_000)),
@@ -61,7 +61,9 @@ class RestQuoteFallbackTest {
             assertThat(quote.currency).isEqualTo("USD")
             assertThat(quote.price.toPlainString()).isEqualTo("254.1")
             assertThat(quote.volume.toPlainString()).isEqualTo("0")
-            assertThat(fallback.stats()).isEqualTo(FallbackStats(active = true, polls = 1, quotes = 1, failures = 0))
+            assertThat(
+                fallback.stats(),
+            ).isEqualTo(FallbackStats(active = true, polls = 1, quotes = 1, failures = 0, silentSymbols = 1))
         }
 
     @Test
@@ -90,6 +92,30 @@ class RestQuoteFallbackTest {
         }
 
     @Test
+    fun `stands in for one symbol that went quiet while the rest keep streaming`() =
+        runTest {
+            val msft = FallbackSymbol("MSFT", "trade:us", Market.US)
+            val fallback =
+                RestQuoteFallback(
+                    fetchPrices = { codes ->
+                        asked += codes
+                        codes.associateWith { decimal("254.10") }
+                    },
+                    symbols = { listOf(AMZN, msft) },
+                    isMarketOpen = { _, _ -> true },
+                    // AMZN's topic stopped; MSFT ticked a second ago.
+                    silentFor = { code -> if (code == "AMZN") 45.seconds else 1.seconds },
+                    paused = { false },
+                    onQuote = { quotes += it },
+                )
+
+            fallback.run()
+
+            assertThat(asked).containsExactly(listOf("AMZN"))
+            assertThat(fallback.stats().silentSymbols).isEqualTo(1)
+        }
+
+    @Test
     fun `drops a REST price the stream has already overtaken`() =
         runTest {
             val fallback =
@@ -97,7 +123,7 @@ class RestQuoteFallbackTest {
                     fetchPrices = { codes -> codes.associateWith { decimal("254.10") } },
                     symbols = { listOf(AMZN) },
                     isMarketOpen = { _, _ -> true },
-                    streamSilentFor = { 60.seconds },
+                    silentFor = { 60.seconds },
                     paused = { false },
                     onQuote = { quotes += it },
                     // A tick for AMZN landed after the request went out.
@@ -124,7 +150,7 @@ class RestQuoteFallbackTest {
                     },
                     symbols = { listOf(AMZN) },
                     isMarketOpen = { _, _ -> true },
-                    streamSilentFor = { 60.seconds },
+                    silentFor = { 60.seconds },
                     paused = { false },
                     onQuote = {},
                     onError = { errors += it },
@@ -135,6 +161,8 @@ class RestQuoteFallbackTest {
             fallback.run()
 
             assertThat(errors).hasSize(1)
-            assertThat(fallback.stats()).isEqualTo(FallbackStats(active = true, polls = 2, quotes = 1, failures = 1))
+            assertThat(
+                fallback.stats(),
+            ).isEqualTo(FallbackStats(active = true, polls = 2, quotes = 1, failures = 1, silentSymbols = 1))
         }
 }

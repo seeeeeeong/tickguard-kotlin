@@ -3,24 +3,22 @@ package tickguard.tools
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import tickguard.stream.Decimal
-import tickguard.trading.Bar
-import tickguard.trading.History
-import tickguard.trading.Sleeve
+import tickguard.trading.SleeveProposal
 import tickguard.trading.TestSleeves
-import tickguard.trading.proposeTrades
+import tickguard.trading.attribute
+import tickguard.trading.position
+import tickguard.trading.proposeRebalance
 import java.time.LocalDate
-import java.util.Locale
 import kotlin.system.exitProcess
 
 /**
- * The three test sleeves' trades for a person to place, from the bars in the store.
+ * Previews what the service will propose for the test sleeves, from the ledger
+ * and the stored bars: the same function, run by hand.
  *
- *   ./gradlew :tools:sleeveProposal --args="1393.5"
+ *   ./gradlew :tools:sleeveProposal --args="1368.6"
  *
  * The argument is the KRW per USD rate, for showing amounts in won; the tool
- * does not call Toss, so it can run beside the service. Holdings start empty:
- * this proposes the opening trades. Later rebalances run inside the service,
- * which knows what each sleeve holds.
+ * does not call Toss, so it can run beside the service.
  */
 suspend fun main(args: Array<String>) {
     val fx = args.getOrNull(0)?.toBigDecimalOrNull()?.let { Decimal.parse(it.toPlainString(), "fx") }
@@ -30,41 +28,34 @@ suspend fun main(args: Array<String>) {
     }
     val store = openStore(environment())
     try {
-        val yesterday = LocalDate.now().minusDays(1)
+        val today = LocalDate.now()
+        val orders = store.ordersSince(TestSleeves.START)
+        val owned = attribute(orders, TestSleeves.ALL, store.orderTags(), TestSleeves.PERSONAL, TestSleeves.START)
         for (sleeve in TestSleeves.ALL) {
-            val bars =
-                sleeve.universe
-                    .associateWith {
-                        store.bars(it, yesterday.minusYears(2), yesterday)
-                    }.filterValues { it.isNotEmpty() }
-            println(proposal(sleeve, bars, fx))
+            val bars = sleeve.universe.associateWith { store.bars(it, today.minusYears(2), today.minusDays(1)) }
+            val proposal = proposeRebalance(sleeve, position(sleeve, owned[sleeve.id].orEmpty()), bars)
+            println(proposal?.let { text(it, fx) } ?: "== ${sleeve.name}: 일봉 없음")
         }
     } finally {
         withContext(NonCancellable) { store.close() }
     }
 }
 
-/** Vanguard's threshold: a drift under five points is not worth a trade. */
-private const val BAND = "0.05"
-
-/** A sleeve's opening proposal as text: signals as of the last bar, then the trades. */
-fun proposal(
-    sleeve: Sleeve,
-    bars: Map<String, List<Bar>>,
+fun text(
+    proposal: SleeveProposal,
     fx: Decimal,
 ): String {
-    if (bars.isEmpty()) return "${sleeve.name}: 일봉 없음"
-    val day = bars.values.maxOf { it.last().day }
-    val history = History.of(day, bars)
-    val targets = sleeve.strategy().targets(history)
-    val prices = bars.mapValues { it.value.last().close }
-    val capitalUsd = sleeve.capital
-    val trades = proposeTrades(targets, emptyMap(), prices, capitalUsd, Decimal.parse(BAND, "band"))
     val lines = ArrayList<String>()
-    lines += "== ${sleeve.name} · ${(capitalUsd * fx).format(0)}원 (\$${capitalUsd.format(2)}) · 기준 $day 종가"
+    val sleeve = proposal.sleeve
     lines +=
-        "   목표: " + targets.filterValues { it.signum() > 0 }.entries.joinToString(", ") { "${it.key} ${pct(it.value)}" }
-    for (trade in trades) {
+        "== ${sleeve.name} · \$${proposal.value.format(2)} (자본 \$${sleeve.capital.format(2)}) · 기준 ${proposal.asOf} 종가"
+    proposal.stopped?.let { lines += "   손실 한도: $it" }
+    lines +=
+        "   목표: " +
+        proposal.targets.filterValues { it.signum() > 0 }.entries.joinToString(
+            ", ",
+        ) { "${it.key} ${pct(it.value)}" }
+    for (trade in proposal.trades) {
         val code = trade.code.padEnd(CODE_WIDTH)
         val quantity = trade.quantity.toPlainString().padStart(QUANTITY_WIDTH)
         val krw = (trade.value * fx).format(0)
@@ -73,7 +64,7 @@ fun proposal(
                 2,
             )} (${krw}원) @ ${trade.price.toPlainString()}"
     }
-    if (trades.isEmpty()) lines += "   (거래 없음)"
+    if (proposal.trades.isEmpty()) lines += "   (거래 없음)"
     return lines.joinToString("\n")
 }
 

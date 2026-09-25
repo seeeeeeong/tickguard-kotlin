@@ -288,6 +288,8 @@ class Tickguard(
 
     internal val orders = OrderFeed(counters, store, rest, clock, ::report)
 
+    internal val sleeves = SleeveDesk(store, rest, clock, ::report)
+
     private var loggedRecordFailure = false
 
     internal val ticks =

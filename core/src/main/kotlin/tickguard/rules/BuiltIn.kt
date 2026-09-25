@@ -30,11 +30,33 @@ fun drawdownFromAverage(
     // Two minutes: a single print through the threshold is the spread moving.
     holdFor: Duration = 2.minutes,
     cooldown: Duration = 1.hours,
+    /**
+     * Null keys the cooldown by symbol, as the original did: one alert per
+     * cooldown, however far the price falls meanwhile. A step keys it by how
+     * many steps past the threshold the price is, so a deeper fall alerts at
+     * once while a drawdown that merely persists stays quiet for the cooldown.
+     * Left null by the parity harness, which pins the original's behaviour.
+     */
+    escalateEvery: String? = null,
 ): Rule {
-    val remaining = Decimal.ONE - Decimal.parse(fraction, "fraction")
-    val percent = (Decimal.parse(fraction, "fraction") * Decimal.HUNDRED).toPlainString()
+    val drop = Decimal.parse(fraction, "fraction")
+    val remaining = Decimal.ONE - drop
+    val percent = (drop * Decimal.HUNDRED).toPlainString()
+    val step = escalateEvery?.let { Decimal.parse(it, "escalateEvery") }
 
-    return rule("drawdown-${percent}pct", holdFor, cooldown) { context ->
+    val dedupe = { context: RuleContext ->
+        val position = context.position
+        if (step == null || position == null || position.averagePrice.isZero()) {
+            context.trade.code
+        } else {
+            val fallen = (position.averagePrice - context.trade.price) / position.averagePrice
+            val past = fallen - drop
+            val level = if (past < Decimal.ZERO) 0L else (past / step).floor()
+            "${context.trade.code}:$level"
+        }
+    }
+
+    return rule("drawdown-${percent}pct", holdFor, cooldown, dedupe) { context ->
         val position =
             context.position ?: run {
                 context.decline(DeclineReason.NO_POSITION)
@@ -134,6 +156,7 @@ private fun rule(
     id: String,
     holdFor: Duration,
     cooldown: Duration,
+    dedupe: (RuleContext) -> String = { it.trade.code },
     evaluate: (RuleContext) -> Outcome?,
 ): Rule =
     object : Rule {
@@ -141,7 +164,7 @@ private fun rule(
         override val holdFor = holdFor
         override val cooldown = cooldown
 
-        override fun dedupeKey(context: RuleContext) = context.trade.code
+        override fun dedupeKey(context: RuleContext) = dedupe(context)
 
         override fun evaluate(context: RuleContext) = evaluate(context)
     }

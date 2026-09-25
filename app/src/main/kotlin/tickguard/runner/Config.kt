@@ -5,6 +5,7 @@ import tickguard.auth.loadCredentials
 import tickguard.subscribe.Topic
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -17,6 +18,8 @@ data class RulesConfig(
     val drawdownFraction: String,
     val drawdownFor: Duration,
     val drawdownCooldown: Duration,
+    /** A fall this much deeper than the last alert's step alerts again at once. */
+    val drawdownEscalateEvery: String,
     val rapidMoveFraction: String,
     val rapidMoveWindow: Duration,
 )
@@ -96,7 +99,11 @@ fun loadConfig(env: (String) -> String?): Config {
             RulesConfig(
                 drawdownFraction = read.ratio("TICKGUARD_DRAWDOWN", "0.07"),
                 drawdownFor = read.duration("TICKGUARD_DRAWDOWN_FOR_MS", 2.minutes),
-                drawdownCooldown = read.duration("TICKGUARD_DRAWDOWN_COOLDOWN_MS", 60.minutes),
+                // Four hours, Alertmanager's default repeat interval. At one hour
+                // a drawdown that simply persisted paged every hour overnight with
+                // the same line; a deeper fall now alerts through escalation instead.
+                drawdownCooldown = read.duration("TICKGUARD_DRAWDOWN_COOLDOWN_MS", 4.hours),
+                drawdownEscalateEvery = read.ratio("TICKGUARD_DRAWDOWN_ESCALATE", "0.02"),
                 rapidMoveFraction = read.ratio("TICKGUARD_RAPID_MOVE", "0.03"),
                 rapidMoveWindow = read.duration("TICKGUARD_RAPID_MOVE_WINDOW_MS", 5.minutes),
             ),

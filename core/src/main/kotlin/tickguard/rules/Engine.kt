@@ -96,6 +96,19 @@ class RuleEngine(
 
     /** When the condition for a key first held. Cleared the moment it stops. */
     private val pendingSince = LinkedHashMap<String, Instant>()
+
+    /**
+     * The key a rule is currently holding toward, per rule and symbol.
+     *
+     * A rule whose key changes while its condition holds — a drawdown moving
+     * into a deeper step — has broken the earlier key's streak, and a rule
+     * whose condition stops holding has broken every streak for that symbol.
+     * Clearing only the key of the current tick would leave a deeper step's
+     * start time behind after a recovery, and a later dip into that step would
+     * fire at once instead of holding. For a rule keyed by symbol alone the key
+     * never changes, so this is exactly the original behaviour.
+     */
+    private val holding = LinkedHashMap<String, String>()
     private val longestCooldown: Duration = rules.maxOfOrNull { it.cooldown } ?: Duration.ZERO
     private var evaluated = 0
     private var fired = 0
@@ -157,10 +170,19 @@ class RuleEngine(
     ) {
         val key = "${rule.id} ${rule.dedupeKey(context)}"
         val outcome = rule.evaluate(context)
+        val slot = "${rule.id} ${context.trade.code}"
+        val previous = holding[slot]
 
         if (outcome == null) {
             pendingSince -= key
+            if (previous != null) pendingSince -= previous
+            holding -= slot
             return
+        }
+
+        if (previous != key) {
+            if (previous != null) pendingSince -= previous
+            holding[slot] = key
         }
 
         val firedAt = lastFiredAt[key]

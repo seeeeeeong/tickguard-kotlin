@@ -219,6 +219,7 @@ class Tickguard(
                         config.rules.drawdownFraction,
                         config.rules.drawdownFor,
                         config.rules.drawdownCooldown,
+                        config.rules.drawdownEscalateEvery,
                     ),
                     rapidMove(config.rules.rapidMoveFraction, config.rules.rapidMoveWindow),
                 ),

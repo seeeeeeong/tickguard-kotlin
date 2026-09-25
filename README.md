@@ -87,9 +87,29 @@ and with the commit. The server only pulls; it never builds.
 mkdir data && chown 10001 data
 echo "TICKGUARD_BIND=<tailnet address>" >> .env    # status page on the tailnet only
 
-docker compose pull && docker compose up -d         # deploy
-TICKGUARD_TAG=<commit> docker compose up -d         # roll back to a commit
+docker compose pull && docker compose up -d         # deploy, by hand on the server
 ```
+
+From a laptop, `scripts/deploy.sh [commit]` does the same and waits for the stream to
+connect, not just for `/health`: a process can be healthy while Toss refuses everything it
+sends. If the stream is not connected within two minutes it puts the previous image back.
+The tag it deployed is written to `.env`, so a later `docker compose up -d` keeps it.
+
+### Backups
+
+The host takes a consistent copy every night (`sqlite3 .backup`, 04:15, one per weekday)
+into `/opt/tickguard/backup`. To restore one:
+
+```bash
+docker compose stop
+mv data/tickguard.db data/tickguard.db.broken && rm -f data/tickguard.db-wal data/tickguard.db-shm
+cp backup/tickguard-<weekday>.db data/tickguard.db && chown 10001 data/tickguard.db
+sqlite3 data/tickguard.db "PRAGMA integrity_check"    # ok
+docker compose start
+```
+
+The copies sit on the same disk as the database, so they cover a bad write or a bad
+migration, not a failed disk.
 
 - **One copy at a time.** Stop the server's copy (`docker compose stop`) before running
   one anywhere else, the laptop included. Two copies revoke each other's token.

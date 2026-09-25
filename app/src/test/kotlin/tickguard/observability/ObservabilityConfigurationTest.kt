@@ -35,7 +35,9 @@ class ObservabilityConfigurationTest
 
             assertThat(response.statusCode()).isEqualTo(200)
             assertThat(response.headers().firstValue("Content-Type").orElse("")).contains("text/plain")
-            assertThat(response.body()).contains("tickguard_probe_total 5.0").contains("jvm_gc_pause")
+            // The GC binder is there. Not jvm_gc_pause: that timer appears only after
+            // the first collection, which a short test run may not have had.
+            assertThat(response.body()).contains("tickguard_probe_total 5.0").contains("jvm_gc_max_data_size_bytes")
         }
 
         @Test

@@ -27,6 +27,7 @@ class ConfigTest {
         assertThat(config.rules.drawdownEscalateEvery).isEqualTo("0.02")
         assertThat(config.groupWait).isEqualTo(30.seconds)
         assertThat(config.slackWebhookUrl).isNull()
+        assertThat(config.discordWebhookUrl).isNull()
     }
 
     @Test
@@ -81,12 +82,16 @@ class ConfigTest {
     @Test
     fun `treats an empty webhook as absent, not as an empty URL`() {
         assertThat(load("TICKGUARD_SLACK_WEBHOOK" to "").slackWebhookUrl).isNull()
+        assertThat(load("TICKGUARD_DISCORD_WEBHOOK" to "").discordWebhookUrl).isNull()
     }
 
     @Test
     fun `never prints the secrets it holds`() {
-        val printed = load("TICKGUARD_LLM_API_KEY" to "sk-live-123").toString()
-
+        val printed =
+            load(
+                "TICKGUARD_LLM_API_KEY" to "sk-live-123",
+                "TICKGUARD_DISCORD_WEBHOOK" to "https://discord.com/api/webhooks/1/secret-token",
+            ).toString()
         assertThat(printed).doesNotContain("secret").doesNotContain("sk-live-123")
     }
 

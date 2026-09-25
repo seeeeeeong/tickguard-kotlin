@@ -66,6 +66,8 @@ data class Config(
     val extraSymbols: List<Topic>,
     val rules: RulesConfig,
     val slackWebhookUrl: String?,
+    /** An execute-webhook URL. Any channel set here gets every alert; none set leaves the console only. */
+    val discordWebhookUrl: String?,
     /** `tickguard you@example.com`. Without it, SEC filings are not collected. */
     val secContact: String?,
     /** Without an API key, headlines are collected but not judged. */
@@ -108,6 +110,7 @@ fun loadConfig(env: (String) -> String?): Config {
                 rapidMoveWindow = read.duration("TICKGUARD_RAPID_MOVE_WINDOW_MS", 5.minutes),
             ),
         slackWebhookUrl = env("TICKGUARD_SLACK_WEBHOOK")?.takeIf { it.isNotEmpty() },
+        discordWebhookUrl = env("TICKGUARD_DISCORD_WEBHOOK")?.takeIf { it.isNotEmpty() },
         secContact = secContact(env("TICKGUARD_SEC_CONTACT")),
         llm =
             LlmConfig(

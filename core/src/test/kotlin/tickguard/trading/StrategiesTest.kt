@@ -116,4 +116,27 @@ class StrategiesTest {
 
         assertThat(trend.maxDrawdown).isLessThan(hold.maxDrawdown / 2)
     }
+
+    @Test
+    fun `faber timing keeps each slot fixed and parks a slot below trend in cash`() {
+        val bars =
+            mapOf(
+                "UP" to closes("UP", 10, 11, 12, 13),
+                "DOWN" to closes("DOWN", 13, 12, 11, 10),
+                "SGOV" to closes("SGOV", 100, 100, 100, 100),
+            )
+
+        val targets = FaberTiming(listOf("UP", "DOWN"), cash = "SGOV", days = 3).targets(historyOn(bars, 3))
+
+        assertThat(targets).isEqualTo(mapOf("UP" to decimal("0.5"), "DOWN" to Decimal.ZERO, "SGOV" to decimal("0.5")))
+    }
+
+    @Test
+    fun `faber timing parks a slot it cannot judge yet rather than guessing`() {
+        val bars = mapOf("NEW" to closes("NEW", 10, 11))
+
+        val targets = FaberTiming(listOf("NEW"), cash = "SGOV", days = 3).targets(historyOn(bars, 1))
+
+        assertThat(targets).isEqualTo(mapOf("NEW" to Decimal.ZERO, "SGOV" to Decimal.ONE))
+    }
 }

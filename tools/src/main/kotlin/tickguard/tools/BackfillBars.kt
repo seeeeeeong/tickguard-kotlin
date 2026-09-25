@@ -9,9 +9,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import tickguard.auth.TokenManager
 import tickguard.auth.loadCredentials
-import tickguard.store.Store
-import tickguard.store.postgres.PostgresStore
-import tickguard.store.sqlite.SqliteStore
 import tickguard.toss.auth.TossAuthClient
 import tickguard.toss.rest.OkHttpRestClient
 import tickguard.trading.fetchDailyBars
@@ -65,12 +62,3 @@ suspend fun main(args: Array<String>) {
 
 /** Far enough back for several market regimes; the API returns what it has. */
 private const val DEFAULT_FROM = "2015-01-01"
-
-private fun openStore(env: Map<String, String>): Store {
-    val url = env["TICKGUARD_PG_URL"]
-    return if (url.isNullOrEmpty()) {
-        SqliteStore.open(env["TICKGUARD_DB"] ?: "tickguard.db")
-    } else {
-        PostgresStore.open(url, env.getValue("TICKGUARD_PG_USER"), env.getValue("TICKGUARD_PG_PASSWORD"))
-    }
-}

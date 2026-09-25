@@ -1,6 +1,9 @@
 package tickguard.tools
 
 import org.sqlite.SQLiteConfig
+import tickguard.store.Store
+import tickguard.store.postgres.PostgresStore
+import tickguard.store.sqlite.SqliteStore
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.ResultSet
@@ -41,3 +44,13 @@ fun Connection.counts(
         val name = if (schema == null) table else "$schema.$table"
         rows("SELECT count(*) AS n FROM $name") { it.getInt("n") }.single()
     }
+
+/** The service's store for a tool: Postgres when TICKGUARD_PG_URL is set, otherwise the SQLite file. */
+fun openStore(env: Map<String, String>): Store {
+    val url = env["TICKGUARD_PG_URL"]
+    return if (url.isNullOrEmpty()) {
+        SqliteStore.open(env["TICKGUARD_DB"] ?: "tickguard.db")
+    } else {
+        PostgresStore.open(url, env.getValue("TICKGUARD_PG_USER"), env.getValue("TICKGUARD_PG_PASSWORD"))
+    }
+}

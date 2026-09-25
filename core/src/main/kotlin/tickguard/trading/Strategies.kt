@@ -100,3 +100,29 @@ private const val DEFAULT_REBALANCE_DAYS = 21
 
 private fun average(values: List<Decimal>): Decimal =
     values.fold(Decimal.ZERO, Decimal::plus) / Decimal.of(values.size.toLong())
+
+/**
+ * Faber's timing model as published: each asset keeps a fixed, equal slot,
+ * held when its close is above its moving average and parked in [cash]
+ * otherwise. Unlike [TrendFilter], a slot never grows when others go to cash,
+ * so the portfolio's risk falls as assets fall below trend.
+ */
+class FaberTiming(
+    private val assets: List<String>,
+    private val cash: String,
+    private val days: Int = DEFAULT_TREND_DAYS,
+) : Strategy {
+    override val name = "faber-timing-sma$days"
+
+    override fun targets(history: History): Map<String, Decimal> {
+        val slot = Decimal.ONE / Decimal.of(assets.size.toLong())
+        val above =
+            assets.associateWith { code ->
+                val closes = history.closes(code, days)
+                closes != null && closes.last() > average(closes)
+            }
+        val parked = above.count { !it.value }
+        return above.mapValues { (_, up) -> if (up) slot else Decimal.ZERO } +
+            (cash to slot * Decimal.of(parked.toLong()))
+    }
+}

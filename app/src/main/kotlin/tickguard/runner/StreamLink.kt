@@ -27,6 +27,8 @@ internal class Counters {
     val ticks = AtomicLong()
     val decodeDropped = AtomicLong()
     val orderEvents = AtomicLong()
+    val orderResyncs = AtomicLong()
+    val orderResyncFailures = AtomicLong()
 
     /** Order events that could not be read. Unlike a dropped tick, each one is an event lost for good. */
     val orderUnreadable = AtomicLong()
@@ -46,6 +48,9 @@ internal class LinkState {
 
     /** When the current socket opened; null while there is none. The process being up says nothing about this. */
     @Volatile var connectedSince: Instant? = null
+
+    /** When the last socket closed: the start of a gap the order resync has to cover. */
+    @Volatile var lastClosedAt: Instant? = null
 }
 
 /** How the stream reaches Toss, and how it learns our address when refused. */
@@ -88,8 +93,15 @@ internal class StreamLink(
                         app.counters.opens.incrementAndGet()
                         app.link.connectedSince = clock.instant()
                         app.topics.attach(connection::send)
+                        // After the declaration, so an event during the fetch is heard too;
+                        // the recorder drops whichever copy arrives second.
+                        val gapStart = app.link.lastClosedAt ?: app.startedAt
+                        engine.launch { app.orders.resync(gapStart) }
                     },
-                    onClosed = { app.link.connectedSince = null },
+                    onClosed = {
+                        app.link.connectedSince = null
+                        app.link.lastClosedAt = clock.instant()
+                    },
                     onFrame = ::onFrame,
                     onBlocked = { onBlocked() },
                     onUnblocked = ::onUnblocked,

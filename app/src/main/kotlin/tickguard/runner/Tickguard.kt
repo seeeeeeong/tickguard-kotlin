@@ -282,7 +282,7 @@ class Tickguard(
             clock = clock,
         )
 
-    private val orders = OrderFeed(counters)
+    internal val orders = OrderFeed(counters, store, rest, clock, ::report)
 
     private var loggedRecordFailure = false
 
@@ -336,6 +336,7 @@ class Tickguard(
         // and one missed now is never delivered again. Not watched by the SLA:
         // an account with no orders today is quiet, not broken.
         topics.add(topicSources.add(TopicSource.ACCOUNT, listOf(Topic(ORDER_TOPIC_TYPE, config.accountSeq))))
+        orders.start(engine)
         pump.start(engine)
         stream.connect()
 

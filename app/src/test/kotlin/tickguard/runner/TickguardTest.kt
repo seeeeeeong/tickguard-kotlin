@@ -121,6 +121,10 @@ class TickguardTest {
                     )
                 }
 
+                path == "/api/v1/orders" -> {
+                    json("""{"result":{"orders":[],"nextCursor":null,"hasNext":false}}""")
+                }
+
                 path == "/api/v1/prices" -> {
                     json("""{"result":[{"symbol":"AAPL","lastPrice":"90"}]}""")
                 }
@@ -234,7 +238,11 @@ class TickguardTest {
                 assertThat(declarations.last()).contains("""{"type":"personal:order","codes":["1"]}""")
                 eventually { app.counters.orderEvents.get() >= 1 }
                 assertThat(app.counters.orderUnreadable.get()).isZero()
-                assertThat(alerts.first { "AAPL" in it }).contains("현재 90 · 평단 100 · 보유 1").contains("· drawdown-7pct")
+                // Recorded in the ledger and alerted once, however many times the fill is redeclared.
+                eventually { alerts.any { "AAPL 매수 체결 1/1주 @ 100" in it } }
+                eventually { app.counters.orderResyncs.get() >= 1 }
+                assertThat(alerts.count { "AAPL 매수 체결" in it }).isEqualTo(1)
+                assertThat(alerts.first { "평단 대비" in it }).contains("현재 90 · 평단 100 · 보유 1").contains("· drawdown-7pct")
                 assertThat(app.counters.ticks.get()).isGreaterThanOrEqualTo(2)
 
                 withContext(engine.coroutineContext) { app.ticks.flush() }

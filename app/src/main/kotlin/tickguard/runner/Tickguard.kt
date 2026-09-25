@@ -31,8 +31,10 @@ import tickguard.notify.discord.DiscordChannel
 import tickguard.notify.slack.SlackChannel
 import tickguard.notify.toNotification
 import tickguard.pipeline.Inbox
+import tickguard.pipeline.Lane
 import tickguard.pipeline.Pump
 import tickguard.pipeline.TickWriter
+import tickguard.pipeline.laneOf
 import tickguard.reconcile.Reconciler
 import tickguard.reconcile.StreamedPrice
 import tickguard.rest.fetchPrices
@@ -280,6 +282,8 @@ class Tickguard(
             clock = clock,
         )
 
+    private val orders = OrderFeed(counters)
+
     private var loggedRecordFailure = false
 
     internal val ticks =
@@ -327,6 +331,11 @@ class Tickguard(
         rules.load()
         topics.load()
         if (stopping) return
+        // Declared with the first socket, before holdings are known: an order
+        // placed while startup waits on the network is an event like any other,
+        // and one missed now is never delivered again. Not watched by the SLA:
+        // an account with no orders today is quiet, not broken.
+        topics.add(topicSources.add(TopicSource.ACCOUNT, listOf(Topic(ORDER_TOPIC_TYPE, config.accountSeq))))
         pump.start(engine)
         stream.connect()
 
@@ -403,6 +412,7 @@ class Tickguard(
     }
 
     private fun handle(frame: ServerFrame.Message) {
+        if (laneOf(frame.topic) == Lane.ORDERS) return orders.handle(frame)
         val decoded = decodeTrade(frame)
         if (decoded !is DecodeResult.Ok) {
             counters.decodeDropped.incrementAndGet()
@@ -510,6 +520,9 @@ class Tickguard(
 
     private companion object {
         val log: Logger = LoggerFactory.getLogger(Tickguard::class.java)
+
+        /** The account's order events; the code is the accountSeq. */
+        const val ORDER_TOPIC_TYPE = "personal:order"
 
         /** The console channel's output: alert text, one per line. */
         val alertLog: Logger = LoggerFactory.getLogger("tickguard.alerts")

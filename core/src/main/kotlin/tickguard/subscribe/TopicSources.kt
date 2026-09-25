@@ -4,6 +4,9 @@ package tickguard.subscribe
 enum class TopicSource {
     HOLDINGS,
     EXTRA,
+
+    /** The account's own order events, wanted for as long as the process runs. */
+    ACCOUNT,
 }
 
 /**

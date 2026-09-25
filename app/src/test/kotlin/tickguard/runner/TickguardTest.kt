@@ -92,6 +92,16 @@ class TickguardTest {
         """{"type":"message","topic":"trade:us:AAPL","data":{"price":"$price","volume":"1",""" +
             """"timestamp":"${OffsetDateTime.now(ZoneOffset.ofHours(9))}","currency":"USD"}}"""
 
+    /** The AsyncAPI's example fill, on the test account. */
+    private fun orderFilled() =
+        """{"type":"message","topic":"personal:order:1","data":{"event":"FILL","accountSeq":"1","order":{""" +
+            """"orderId":"o1","symbol":"AAPL","side":"BUY","orderType":"LIMIT","timeInForce":"DAY",""" +
+            """"status":"FILLED",""" +
+            """"price":"100.5","quantity":"1","orderAmount":null,"currency":"USD",""" +
+            """"orderedAt":"2026-06-23T09:30:00.000+09:00","canceledAt":null,"execution":{"filledQuantity":"1",""" +
+            """"averageFilledPrice":"100","filledAmount":"100","commission":"0.1","tax":"0",""" +
+            """"settlementDate":null}}}}"""
+
     private inner class FakeToss : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
             val path = request.url.encodedPath
@@ -157,6 +167,7 @@ class TickguardTest {
             declarations += text
             val id = Regex("\"id\":\"([^\"]+)\"").find(text)?.groupValues?.get(1)
             webSocket.send("""{"type":"subscriptions","id":"$id","subscribed":[],"rejected":[]}""")
+            if ("personal:order" in text) webSocket.send(orderFilled())
             if ("AAPL" in text && streamTrades) {
                 webSocket.send(trade("90"))
                 // A second print a moment later, so the one-millisecond hold has held.
@@ -219,13 +230,17 @@ class TickguardTest {
                 // Whether the holdings landed inside the first coalescing window
                 // decides the id, so only the set is asserted.
                 assertThat(declarations.last()).endsWith(""",{"type":"trade:us","codes":["AAPL"]}]""")
+                // The account's order events are declared too, read-only, and read.
+                assertThat(declarations.last()).contains("""{"type":"personal:order","codes":["1"]}""")
+                eventually { app.counters.orderEvents.get() >= 1 }
+                assertThat(app.counters.orderUnreadable.get()).isZero()
                 assertThat(alerts.first { "AAPL" in it }).contains("현재 90 · 평단 100 · 보유 1").contains("· drawdown-7pct")
                 assertThat(app.counters.ticks.get()).isGreaterThanOrEqualTo(2)
 
                 withContext(engine.coroutineContext) { app.ticks.flush() }
                 app.tasks.publishSnapshot()
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
-                assertThat(panels).containsEntry("startup", "ready").containsEntry("subscribed", "1 topics")
+                assertThat(panels).containsEntry("startup", "ready").containsEntry("subscribed", "2 topics")
                 assertThat(panels["recorded"]).matches("[2-9]\\d* · 0 failed · 0 dropped")
                 assertThat(panels["stream"]).startsWith("connected ")
                 assertThat(panels["process"]).startsWith("up ")

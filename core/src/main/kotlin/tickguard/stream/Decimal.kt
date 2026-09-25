@@ -69,6 +69,9 @@ value class Decimal private constructor(
         return if (value.signum() < 0 && !text.startsWith("-")) "-$text" else text
     }
 
+    /** Cut to [places] decimals toward zero: an order sized from this is never larger than asked for. */
+    fun down(places: Int) = of(value.setScale(places, RoundingMode.DOWN))
+
     /** The largest whole number not above this one. Counting steps without a detour through Double. */
     fun floor(): Long = value.setScale(0, RoundingMode.FLOOR).longValueExact()
 

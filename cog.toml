@@ -24,6 +24,7 @@ scopes = [
   "backtest",
   "fallback",
   "runner",
+  "execution",
   "ci",
   "deps",
   "repo",

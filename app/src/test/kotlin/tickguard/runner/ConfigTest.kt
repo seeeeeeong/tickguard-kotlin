@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import tickguard.subscribe.Topic
+import tickguard.trading.SleeveMode
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -100,6 +101,29 @@ class ConfigTest {
         assertThatThrownBy { load("TICKGUARD_PG_URL" to "postgres://db/tickguard") }
             .isInstanceOf(ConfigError::class.java)
             .hasMessageContaining("jdbc:postgresql://")
+    }
+
+    @Test
+    fun `keeps every order in the process unless the user turns trading on, sleeve by sleeve`() {
+        val quiet = load().trading
+        assertThat(quiet.enabled).isFalse()
+        assertThat(quiet.modes.values).containsOnly(SleeveMode.OFF)
+
+        val live =
+            load(
+                "TICKGUARD_TRADING" to "on",
+                "TICKGUARD_SLEEVE_A" to "LIVE",
+                "TICKGUARD_SLEEVE_B" to "DRY_RUN",
+            ).trading
+        assertThat(live.enabled).isTrue()
+        assertThat(
+            live.modes,
+        ).containsEntry("A", SleeveMode.LIVE).containsEntry("B", SleeveMode.DRY_RUN).containsEntry("C", SleeveMode.OFF)
+
+        assertThat(load("TICKGUARD_TRADING" to "yes").trading.enabled).isFalse()
+        assertThatThrownBy {
+            load("TICKGUARD_SLEEVE_A" to "live")
+        }.isInstanceOf(ConfigError::class.java).hasMessageContaining("TICKGUARD_SLEEVE_A")
     }
 
     @Test

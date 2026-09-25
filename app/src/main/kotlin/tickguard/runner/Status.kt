@@ -47,6 +47,7 @@ internal fun statusPanels(
         },
         StatusPanel("decode dropped", "$decodeDropped", ok = decodeDropped == 0L),
         ordersPanel(app.counters),
+        StatusPanel("trading", app.sleeves.describe(), ok = !app.sleeves.halted()),
         StatusPanel(
             "queue",
             "${s.inbox.queued.getValue(Lane.QUOTES)} / max ${s.inbox.maxQueued.getValue(Lane.QUOTES)}",

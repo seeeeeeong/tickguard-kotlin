@@ -22,6 +22,8 @@ data class FallbackStats(
     val failures: Int,
     /** Prices dropped because the stream delivered something newer while they were fetched. */
     val stale: Int = 0,
+    /** Symbols REST stood in for on the last run. */
+    val silentSymbols: Int = 0,
 )
 
 /** Longer than any gap in a healthy stream during a session; far shorter than an outage. */
@@ -34,8 +36,10 @@ val DEFAULT_SILENCE = 30.seconds
  * and delivers nothing — every price alert goes dark with it. hummingbot
  * answers the same gap in its order tracking by polling REST often while
  * the user stream is quiet and rarely while it is healthy; this does that
- * for quotes. Silence is measured from the last quote on the stream, which
- * catches a closed socket and a silent open one alike.
+ * for quotes. Silence is measured per symbol, from its own last quote on
+ * the stream: that catches a closed socket, a silent open one, and one
+ * topic that stopped while the rest kept flowing, which a stream-wide
+ * measure cannot see until the SLA watcher's ten minutes are up.
  *
  * Only symbols whose market is open are asked about, so a closed market is
  * quiet rather than "degraded". Paused while the source IP is refused: REST
@@ -54,8 +58,8 @@ class RestQuoteFallback(
     private val fetchPrices: suspend (List<String>) -> Map<String, Decimal>,
     private val symbols: () -> List<FallbackSymbol>,
     private val isMarketOpen: (Market, Instant) -> Boolean,
-    /** Time since the stream last delivered a quote, or since it could have. */
-    private val streamSilentFor: () -> Duration,
+    /** Time since the stream last delivered a quote for this symbol, or since it could have. */
+    private val silentFor: (String) -> Duration,
     /** True while polling would only meet the same refusal. */
     private val paused: () -> Boolean,
     private val onQuote: (Trade) -> Unit,
@@ -71,18 +75,28 @@ class RestQuoteFallback(
     private var quotes = 0
     private var failures = 0
     private var stale = 0
+    private var silentSymbols = 0
 
     /** Called on a timer. Does nothing while the stream is healthy. */
     @Suppress("TooGenericExceptionCaught") // Any failed poll is counted and retried on the next tick.
     suspend fun run() {
         val at = clock.instant()
-        val open = symbols().filter { isMarketOpen(it.market, at) }
-        active = !paused() && open.isNotEmpty() && streamSilentFor() >= silence
+        val silent =
+            if (paused()) {
+                emptyList()
+            } else {
+                symbols().filter {
+                    isMarketOpen(it.market, at) &&
+                        silentFor(it.code) >= silence
+                }
+            }
+        silentSymbols = silent.size
+        active = silent.isNotEmpty()
         if (!active) return
 
         polls += 1
         try {
-            emit(open, fetchPrices(open.map { it.code }), requestedAt = at)
+            emit(silent, fetchPrices(silent.map { it.code }), requestedAt = at)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -91,7 +105,7 @@ class RestQuoteFallback(
         }
     }
 
-    fun stats() = FallbackStats(active, polls, quotes, failures, stale)
+    fun stats() = FallbackStats(active, polls, quotes, failures, stale, silentSymbols)
 
     private fun emit(
         open: List<FallbackSymbol>,

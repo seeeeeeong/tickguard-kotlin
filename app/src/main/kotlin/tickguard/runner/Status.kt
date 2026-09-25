@@ -75,7 +75,11 @@ private fun fallbackPanel(
     val silent = Math.round((now.toEpochMilli() - app.lastQuoteAt.toEpochMilli()) / MILLIS_PER_SECOND)
     return StatusPanel(
         "fallback",
-        if (s.fallback.active) "REST polling · stream silent ${silent}s · ${s.fallback.polls} polls" else "idle",
+        if (s.fallback.active) {
+            "REST polling ${s.fallback.silentSymbols} symbols · stream last quote ${silent}s ago · ${s.fallback.polls} polls"
+        } else {
+            "idle"
+        },
         ok = !s.fallback.active && s.fallback.failures == 0,
     )
 }

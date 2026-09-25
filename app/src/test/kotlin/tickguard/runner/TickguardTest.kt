@@ -286,7 +286,7 @@ class TickguardTest {
                 assertThat(app.ticks.stats().written).isZero()
                 app.tasks.publishSnapshot()
                 val panels = statusPanels(app, java.time.Instant.now()).associate { it.label to it.value }
-                assertThat(panels["fallback"]).startsWith("REST polling · stream silent")
+                assertThat(panels["fallback"]).startsWith("REST polling 1 symbols")
 
                 withContext(engine.coroutineContext) { app.stop() }
             }

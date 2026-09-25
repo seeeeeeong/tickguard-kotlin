@@ -375,7 +375,9 @@ class TickguardTest {
                 eventually { app.startup == "ready" }
                 // As the /sleeves/rebalance route does: propose now, then place in the open window.
                 app.sleeves.requestNow()
-                eventually { orderPosts.size == 5 }
+                // The summary goes out once the whole run has finished, tags included;
+                // the fifth POST arriving says only that the fifth order was sent.
+                eventually { alerts.any { "리밸런싱 실행" in it && "✔ A BUY SPY" in it } }
                 // A second look in the same window places nothing more.
                 withContext(engine.coroutineContext) { app.sleeves.execute() }
 
@@ -385,7 +387,6 @@ class TickguardTest {
                 ).contains("\"orderType\":\"MARKET\"").contains("\"orderAmount\":\"30.68\"")
                 assertThat(orderPosts.map { Regex("tg-\\d{8}-A-B-[A-Z]+").find(it)?.value }).doesNotContainNull()
                 assertThat(store.orderTags()).hasSize(5).allSatisfy { _, sleeve -> assertThat(sleeve).isEqualTo("A") }
-                eventually { alerts.any { "리밸런싱 실행" in it && "✔ A BUY SPY" in it } }
 
                 withContext(engine.coroutineContext) { app.stop() }
             }

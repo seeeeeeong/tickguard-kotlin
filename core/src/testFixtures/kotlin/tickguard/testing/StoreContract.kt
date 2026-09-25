@@ -26,10 +26,12 @@ import tickguard.store.Store
 import tickguard.store.TickRow
 import tickguard.subscribe.SubscriptionCoordinator
 import tickguard.subscribe.Topic
+import tickguard.trading.Bar
 import tickguard.verdict.Direction
 import tickguard.verdict.Verdict
 import java.time.Instant
 import java.time.InstantSource
+import java.time.LocalDate
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -524,6 +526,50 @@ abstract class StoreContract {
             h.restart()
 
             assertThat(h.store.openOrders().map { it.orderId }).containsExactly("early", "late")
+        }
+
+    private fun bar(
+        day: String,
+        close: String,
+        code: String = "AAPL",
+    ) = Bar(
+        code,
+        LocalDate.parse(day),
+        decimal("100.10"),
+        decimal("102"),
+        decimal("99.5"),
+        decimal(close),
+        decimal("1000"),
+    )
+
+    @Test
+    fun `keeps daily bars per symbol and day, reads a range oldest first, and exact`() =
+        contract { h ->
+            h.store.recordBars(
+                listOf(bar("2026-01-06", "101.2"), bar("2026-01-05", "100.3"), bar("2026-01-05", "7", code = "B")),
+            )
+            h.restart()
+
+            val read = h.store.bars("AAPL", LocalDate.parse("2026-01-01"), LocalDate.parse("2026-01-31"))
+
+            assertThat(read.map { it.day.toString() to it.close.toPlainString() })
+                .containsExactly("2026-01-05" to "100.3", "2026-01-06" to "101.2")
+            assertThat(read.first().open.toPlainString()).isEqualTo("100.1")
+            assertThat(h.store.bars("AAPL", LocalDate.parse("2026-01-06"), LocalDate.parse("2026-01-06"))).hasSize(1)
+        }
+
+    @Test
+    fun `replaces a day fetched again, since adjusted history is rewritten after a split`() =
+        contract { h ->
+            h.store.recordBars(listOf(bar("2026-01-05", "400")))
+            h.store.recordBars(listOf(bar("2026-01-05", "100")))
+
+            assertThat(
+                h.store
+                    .bars("AAPL", LocalDate.parse("2026-01-05"), LocalDate.parse("2026-01-05"))
+                    .single()
+                    .close,
+            ).isEqualTo(decimal("100"))
         }
 
     private companion object {

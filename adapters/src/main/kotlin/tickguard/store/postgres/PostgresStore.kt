@@ -15,6 +15,7 @@ import tickguard.rules.Signal
 import tickguard.store.Store
 import tickguard.store.StoredSignal
 import tickguard.store.TickRow
+import tickguard.trading.BarStore
 import tickguard.verdict.Direction
 import tickguard.verdict.MAX_VERDICT_ATTEMPTS
 import tickguard.verdict.PendingStory
@@ -52,7 +53,8 @@ class PostgresStore private constructor(
     private val io: CoroutineDispatcher,
     private val ordered: CoroutineDispatcher = io.limitedParallelism(1),
 ) : Store,
-    OrderStore by PostgresOrders(pool, io) {
+    OrderStore by PostgresOrders(pool, io),
+    BarStore by PostgresBars(pool, io) {
     override suspend fun firesSince(since: Instant): Map<String, Instant> =
         query("SELECT key, fired_at FROM fires WHERE fired_at >= ? AND delivered ORDER BY fired_at, key", since) {
             it.getString("key") to it.instant("fired_at")

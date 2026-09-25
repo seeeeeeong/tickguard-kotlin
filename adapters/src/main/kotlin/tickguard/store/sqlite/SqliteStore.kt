@@ -12,6 +12,7 @@ import tickguard.rules.Signal
 import tickguard.store.Store
 import tickguard.store.StoredSignal
 import tickguard.store.TickRow
+import tickguard.trading.BarStore
 import tickguard.verdict.Direction
 import tickguard.verdict.MAX_VERDICT_ATTEMPTS
 import tickguard.verdict.PendingStory
@@ -40,7 +41,8 @@ class SqliteStore private constructor(
     private val db: Connection,
     private val io: CoroutineDispatcher,
 ) : Store,
-    OrderStore by SqliteOrders(db, io) {
+    OrderStore by SqliteOrders(db, io),
+    BarStore by SqliteBars(db, io) {
     override suspend fun firesSince(since: Instant): Map<String, Instant> =
         query("SELECT key, fired_at FROM fires WHERE fired_at >= ? AND delivered = 1", since.toEpochMilli()) {
             it.getString("key") to it.instant("fired_at")
@@ -377,6 +379,7 @@ private fun migrate(db: Connection) {
     // The order ledger. The original never had it and never reads it, so a
     // rollback leaves these tables unused rather than in the way.
     SqliteOrders.SCHEMA.forEach { sql -> db.createStatement().use { it.execute(sql) } }
+    db.createStatement().use { it.execute(SqliteBars.SCHEMA) }
 }
 
 private fun PreparedStatement.bind(vararg values: Any): PreparedStatement {

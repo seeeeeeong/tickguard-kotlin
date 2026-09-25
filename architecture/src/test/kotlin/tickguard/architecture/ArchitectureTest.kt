@@ -28,7 +28,8 @@ class ArchitectureTest {
 
     @Test
     fun `nothing but token issuance writes to Toss`() {
-        Rules.readOnly("tickguard.toss", "tickguard.toss.auth").check(classesOf(*MODULES))
+        Rules.readOnly("tickguard.toss", "tickguard.toss.auth", "tickguard.toss.execution").check(classesOf(*MODULES))
+        Rules.createsOnly("tickguard.toss.execution").check(classesOf(*MODULES))
     }
 
     private companion object {

@@ -25,11 +25,28 @@ class RulesTest {
 
     @Test
     fun `the read-only rule catches a request with a body outside token issuance`() {
-        val result = Rules.readOnly("fixtures.toss", "fixtures.toss.auth").evaluate(fixtures("fixtures.toss"))
+        val result =
+            Rules
+                .readOnly(
+                    "fixtures.toss",
+                    "fixtures.toss.auth",
+                    "fixtures.toss.execution",
+                ).evaluate(fixtures("fixtures.toss"))
 
         assertThat(result.hasViolation()).isTrue()
         assertThat(result.failureReport.details)
             .anyMatch { it.contains("PlaceOrder") }
             .noneMatch { it.contains("IssueToken") }
+            .noneMatch { it.contains("CreateOrder") }
+    }
+
+    @Test
+    fun `the creates-only rule catches the execution module modifying or cancelling an order`() {
+        val result = Rules.createsOnly("fixtures.toss.execution").evaluate(fixtures("fixtures.toss.execution"))
+
+        assertThat(result.hasViolation()).isTrue()
+        assertThat(result.failureReport.details)
+            .anyMatch { it.contains("CancelOrder") }
+            .noneMatch { it.contains("CreateOrder") }
     }
 }

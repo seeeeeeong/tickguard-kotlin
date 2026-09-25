@@ -48,4 +48,11 @@ class OrderWindowTest {
         assertThat(orderWindowEnd(hours, Instant.parse("2026-11-02T20:00:01Z"))).isNull()
         assertThat(orderWindowEnd(null, Instant.parse("2026-11-02T15:00:00Z"))).isNull()
     }
+
+    @Test
+    fun `gives the day's window for a page to count down to`() {
+        assertThat(orderWindow(hours))
+            .isEqualTo(Instant.parse("2026-11-02T14:40:00Z")..Instant.parse("2026-11-02T20:00:00Z"))
+        assertThat(orderWindow(null)).isNull()
+    }
 }

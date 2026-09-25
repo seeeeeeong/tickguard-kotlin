@@ -35,3 +35,11 @@ fun orderWindowEnd(
         .firstOrNull { !now.isBefore(it.from.plus(AFTER_OPEN)) && !now.isAfter(it.to.minus(BEFORE_CLOSE)) }
         ?.to
         ?.minus(BEFORE_CLOSE)
+
+/** The calendar's order window, opening to closing, or null without a regular session. */
+fun orderWindow(hours: MarketHours?): ClosedRange<Instant>? =
+    hours
+        ?.sessions
+        .orEmpty()
+        .firstOrNull { it.name.endsWith("regularMarket") }
+        ?.let { it.from.plus(AFTER_OPEN)..it.to.minus(BEFORE_CLOSE) }

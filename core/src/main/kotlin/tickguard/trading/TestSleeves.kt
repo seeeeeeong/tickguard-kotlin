@@ -48,6 +48,16 @@ object TestSleeves {
             "SPCX",
         )
 
+    /** The dip sleeve's capital: the account's dollars on 2026-09-25, as the user set it. Code, not configuration. */
+    val DIP_CAPITAL: Decimal = Decimal.parse("733.98", "dip capital")
+
+    /**
+     * The momentum sleeve's large caps without GOOGL, which the user keeps
+     * and this must never trade, and without SPCX, too young for a 200-day
+     * average. SPY is where the sleeve's idle money waits.
+     */
+    private val DIP_SYMBOLS = MOMENTUM - "GOOGL" - "SPCX"
+
     private fun won(amount: Long) = Decimal.of(amount) / FX
 
     /** Vanguard's five-point threshold, for every sleeve. */
@@ -85,6 +95,17 @@ object TestSleeves {
                 BAND,
                 Decimal.parse("0.30", "loss"),
                 LossAction.STOP_SLEEVE,
+            ),
+            Sleeve(
+                "D",
+                "D 반등형",
+                DIP_CAPITAL,
+                DIP_SYMBOLS + "SPY",
+                ::BuyAndHold,
+                BAND,
+                Decimal.parse("0.40", "loss"),
+                LossAction.STOP_BUYING,
+                DipRules(),
             ),
         )
 }

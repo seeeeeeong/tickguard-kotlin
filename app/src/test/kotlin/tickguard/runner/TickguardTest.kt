@@ -141,6 +141,11 @@ class TickguardTest {
                     json("""{"result":{"orders":[],"nextCursor":null,"hasNext":false}}""")
                 }
 
+                // No new bars: the tests seed the store with the ones they need.
+                path == "/api/v1/candles" -> {
+                    json("""{"result":{"candles":[],"nextBefore":null}}""")
+                }
+
                 path == "/api/v1/exchange-rate" -> {
                     json("""{"result":{"baseCurrency":"USD","quoteCurrency":"KRW","rate":"1368.6"}}""")
                 }
@@ -428,6 +433,41 @@ class TickguardTest {
                 }
                 assertThat(orderPosts).hasSize(5)
                 assertThat(app.sleeves.describe()).startsWith("STOPPED")
+
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `runs the dip sleeve, listing its orders first and on LIVE parking its capital in SPY under its own tag`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "DRY_RUN"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "리밸런싱 실행" in it && "· DRY_RUN D BUY SPY \$731.98" in it } }
+                assertThat(orderPosts).isEmpty()
+                // Sleeve A is off: only the dip sleeve proposes.
+                assertThat(app.sleeves.proposals.map { it.sleeve.id }).containsExactly("D")
+
+                assertThat(app.sleeves.goLive()).isNull()
+                eventually { alerts.any { "리밸런싱 실행" in it && "✔ D BUY SPY \$731.98" in it } }
+                assertThat(orderPosts).hasSize(1)
+                assertThat(orderPosts.single()).contains("\"symbol\":\"SPY\"").contains("\"orderAmount\":\"731.98\"")
+                assertThat(store.orderTags().values).containsExactly("D")
 
                 withContext(engine.coroutineContext) { app.stop() }
             }

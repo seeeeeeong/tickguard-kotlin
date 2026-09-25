@@ -376,6 +376,7 @@ private val SLEEVE_NAMES =
         "A" to ("안정형" to "미국·해외 주식, 채권, 금에 똑같이 나눠 담아요"),
         "B" to ("추세형" to "오르는 자산만 담고, 떨어지면 현금으로 피해요"),
         "C" to ("공격형" to "최근 6개월 가장 많이 오른 대형주 2개"),
+        "D" to ("반등형" to "크게 떨어진 우량주를 사서 +8%에 팔아요 · 남는 돈은 S&P 500에"),
     )
 
 /** What each symbol in the test is, in a few words. */

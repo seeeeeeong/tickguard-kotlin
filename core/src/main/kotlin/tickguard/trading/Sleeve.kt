@@ -33,6 +33,8 @@ data class Sleeve(
     /** A fall of this fraction from the capital triggers [lossAction]. */
     val lossLimit: Decimal,
     val lossAction: LossAction,
+    /** Set for a sleeve that trades dips every weekday instead of rebalancing monthly to [strategy]. */
+    val dip: DipRules? = null,
 )
 
 /** What a sleeve holds, and what it has left to spend, from its attributed fills. */

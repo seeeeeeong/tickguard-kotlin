@@ -302,7 +302,9 @@ class Tickguard(
         )
 
     internal val sleeves =
-        SleeveDesk(store, rest, clock, ::report, config.trading, Executor(placer, store), calendar, engine)
+        SleeveDesk(store, rest, clock, ::report, config.trading, Executor(placer, store), calendar, engine) {
+            tasks.refreshBars()
+        }
 
     private var loggedRecordFailure = false
 

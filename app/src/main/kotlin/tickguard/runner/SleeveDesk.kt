@@ -30,12 +30,16 @@ import tickguard.trading.SleeveProposal
 import tickguard.trading.TestSleeves
 import tickguard.trading.attribute
 import tickguard.trading.isRebalanceDay
+import tickguard.trading.lots
 import tickguard.trading.position
+import tickguard.trading.proposeDip
 import tickguard.trading.proposeRebalance
+import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
 import java.time.InstantSource
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 
@@ -56,6 +60,8 @@ internal class SleeveDesk(
     private val calendar: Calendar,
     /** The engine: proposals and orders run where the rest of the domain state does. */
     private val scope: CoroutineScope,
+    /** Fetches the latest daily bars; a proposal must not be priced on a close the store has not seen. */
+    private val refresh: suspend () -> Unit = {},
 ) {
     /** The last proposals made, for the execution module and the status page. */
     @Volatile var proposals: List<SleeveProposal> = emptyList()
@@ -165,6 +171,7 @@ internal class SleeveDesk(
      * Checked every minute; does nothing unless the kill switch is on.
      */
     suspend fun execute() {
+        catchUp()
         val made = proposedAt ?: return
         val now = clock.instant()
         val due = arming.enabled(trading.enabled) && executedFor != made && Duration.between(made, now) <= STALE_AFTER
@@ -212,14 +219,44 @@ internal class SleeveDesk(
     private fun size(order: OrderRequest) =
         order.amount?.let { "\$${it.toPlainString()}" } ?: "${order.quantity?.toPlainString()}주"
 
-    /** On a rebalance day, or when [force]d: works out and sends every sleeve's proposal. */
+    /**
+     * The proposal a restart lost: once the day's proposal time has passed, a
+     * weekday without one proposes now, at most every [RETRY_AFTER] while it
+     * keeps failing (a bar fetch that fails must not be retried every minute).
+     */
+    private suspend fun catchUp() {
+        val now = clock.instant()
+        val today = LocalDate.ofInstant(now, SEOUL)
+        val madeToday = proposedAt?.let { LocalDate.ofInstant(it, SEOUL) } == today
+        val waiting = attemptedAt?.let { Duration.between(it, now) < RETRY_AFTER } == true
+        val early = LocalTime.ofInstant(now, SEOUL) < PROPOSE_AT
+        val settled = madeToday || waiting || early
+        if (!settled && due(today, force = false).isNotEmpty()) propose()
+    }
+
+    @Volatile private var attemptedAt: Instant? = null
+
+    /** The sleeves that propose on [today]: a dip sleeve every weekday, the rest on a rebalance day; never one off. */
+    private fun due(
+        today: LocalDate,
+        force: Boolean,
+    ) = TestSleeves.ALL.filter { sleeve ->
+        val on = (trading.modes[sleeve.id] ?: SleeveMode.OFF) != SleeveMode.OFF
+        val day = if (sleeve.dip != null) today.dayOfWeek !in WEEKEND else isRebalanceDay(today)
+        on && (force || day)
+    }
+
+    /** On a sleeve's day, or when [force]d: works out and sends the proposal of every sleeve that is on. */
     suspend fun propose(force: Boolean = false) {
         val today = LocalDate.now(clock.withZone(SEOUL))
-        if (!force && !isRebalanceDay(today)) return
+        val sleeves = due(today, force)
+        if (sleeves.isEmpty()) return
+        attemptedAt = clock.instant()
+        refresh()
         val orders = store.ordersSince(TestSleeves.START)
         val owned = attribute(orders, TestSleeves.ALL, store.orderTags(), TestSleeves.PERSONAL, TestSleeves.START)
         val made =
-            TestSleeves.ALL.mapNotNull { sleeve ->
+            sleeves.mapNotNull { sleeve ->
                 val bars =
                     sleeve.universe.associateWith {
                         store.bars(
@@ -228,7 +265,10 @@ internal class SleeveDesk(
                             today.minusDays(1),
                         )
                     }
-                proposeRebalance(sleeve, position(sleeve, owned[sleeve.id].orEmpty()), bars)
+                val mine = owned[sleeve.id].orEmpty()
+                val position = position(sleeve, mine)
+                sleeve.dip?.let { proposeDip(sleeve, position, lots(mine), bars, it) }
+                    ?: proposeRebalance(sleeve, position, bars)
             }
         proposals = made
         proposedAt = clock.instant()
@@ -271,6 +311,15 @@ internal class SleeveDesk(
         /** Enough daily history for the longest signal, a 200-day average, with room. */
         const val HISTORY_YEARS = 2L
 
+        /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
+        val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
+
+        /** How long a failed proposal waits before the next try. */
+        val RETRY_AFTER: Duration = Duration.ofMinutes(15)
+
+        /** Days the dip sleeve does not propose: no US session follows. */
+        val WEEKEND = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)
+
         /** The signal's rule id for an execution report. */
         const val EXECUTION_ID = "execution"
 
@@ -281,14 +330,12 @@ internal class SleeveDesk(
         val STALE_AFTER: Duration = Duration.ofHours(30)
 
         /**
-         * The test's hard limits, in code so configuration cannot raise them:
-         * all buys in one run within the test's 300,000 won at the starting rate,
-         * and no more orders than three sleeves' full rebalance could need.
+         * The hard limits, in code so configuration cannot raise them: all buys
+         * in one run within the dip sleeve's capital, which the user set on
+         * 2026-09-25 in place of the three-sleeve test's 300,000 won, and no
+         * more orders than a full rebalance could need.
          */
-        val LIMITS = ExecutionLimits(maxBuys = Decimal.of(TEST_WON) / TestSleeves.FX, maxOrdersPerRun = 20)
-
-        /** The whole test's capital in won. */
-        const val TEST_WON = 300_000L
+        val LIMITS = ExecutionLimits(maxBuys = TestSleeves.DIP_CAPITAL, maxOrdersPerRun = 20)
     }
 }
 

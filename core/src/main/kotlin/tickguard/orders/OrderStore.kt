@@ -28,6 +28,22 @@ interface OrderStore {
 
     /** Every change seen to one order, in the order it was seen. */
     suspend fun orderHistory(orderId: String): List<OrderChange>
+
+    /** Every order placed at or after [since], oldest first: what a sleeve's position is built from. */
+    suspend fun ordersSince(since: Instant): List<Order>
+
+    /**
+     * Records that [orderId] was placed for [sleeve]. The execution module tags
+     * what it sends; a person tags a manual order on a symbol the account also
+     * holds for itself, which attribution never guesses.
+     */
+    suspend fun tagOrder(
+        orderId: String,
+        sleeve: String,
+    )
+
+    /** Every tagged order and its sleeve. */
+    suspend fun orderTags(): Map<String, String>
 }
 
 enum class OrderSource(

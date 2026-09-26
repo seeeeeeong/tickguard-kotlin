@@ -309,7 +309,7 @@ class Tickguard(
             clock,
             ::report,
             config.trading,
-            Executor(placer, store, PlacementFiles(config.placements)),
+            Executor(placer, store, PlacementFiles(config.placements)) { awaitFilled(store, clock, it) },
             calendar,
             engine,
             refresh = {

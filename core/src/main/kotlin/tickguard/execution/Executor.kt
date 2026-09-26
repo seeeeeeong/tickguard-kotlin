@@ -51,6 +51,11 @@ class Executor(
     private val placer: OrderPlacer,
     private val orders: OrderStore,
     private val journal: PlacementJournal = NoJournal,
+    /**
+     * Waits for these orders to fill; false if they did not in time. A sale
+     * accepted is not yet money: a sleeve's buys wait for its sales' fills.
+     */
+    private val settled: suspend (List<String>) -> Boolean = { true },
 ) {
     /** Starts halted when the journal holds an order a previous run never accounted for. */
     @Volatile var halted: String? =
@@ -65,12 +70,10 @@ class Executor(
         val placed = ArrayList<Pair<OrderRequest, String>>()
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
         var stop: Pair<OrderRequest, String>? = null
-        // A sleeve's buys are sized on its sales' proceeds: once one of its sales is refused, its buys
-        // would spend money the sleeve does not have, which may be the account's other cash.
-        val unfunded = LinkedHashSet<String>()
+        val funding = Funding()
         for (request in plan.live) {
             if (halted != null) break
-            if (request.side == Side.BUY && request.sleeve in unfunded) {
+            if (request.side == Side.BUY && !funding.ready(request.sleeve)) {
                 refused += request to UNFUNDED
             } else {
                 val before = refused.size
@@ -78,10 +81,42 @@ class Executor(
                     halted = "${request.clientOrderId}: $why"
                     stop = request to reason
                 }
-                if (request.side == Side.SELL && refused.size > before) unfunded += request.sleeve
+                if (request.side == Side.SELL) {
+                    val id = placed.lastOrNull()?.takeIf { it.first == request }?.second
+                    funding.sold(request.sleeve, id, refused = refused.size > before)
+                }
             }
         }
         return ExecutionResult(placed, refused, stop)
+    }
+
+    /**
+     * Which sleeves' buys may go out. A sleeve's buys are sized on its sales'
+     * proceeds: a sale refused, or accepted but not filled, would have them
+     * spend money the sleeve does not have, which may be the account's other
+     * cash. Its sales are waited for once, before its first buy.
+     */
+    private inner class Funding {
+        private val sales = LinkedHashMap<String, MutableList<String>>()
+        private val unfunded = LinkedHashSet<String>()
+        private val checked = LinkedHashSet<String>()
+
+        fun sold(
+            sleeve: String,
+            orderId: String?,
+            refused: Boolean,
+        ) {
+            when {
+                refused || orderId == null -> unfunded += sleeve
+                else -> sales.getOrPut(sleeve) { ArrayList() } += orderId
+            }
+        }
+
+        suspend fun ready(sleeve: String): Boolean {
+            val pending = sales[sleeve]
+            if (pending != null && checked.add(sleeve) && !settled(pending)) unfunded += sleeve
+            return sleeve !in unfunded
+        }
     }
 
     /**
@@ -150,5 +185,5 @@ class Executor(
         }
 }
 
-/** Why a buy was not sent: its sleeve's sale was refused, so the money it was sized on never came. */
-private val UNFUNDED = PlaceOutcome.Refused(0, "not-sent", "a sale of its sleeve was refused")
+/** Why a buy was not sent: its sleeve's sale was refused or did not fill, so the money it was sized on never came. */
+private val UNFUNDED = PlaceOutcome.Refused(0, "not-sent", "a sale of its sleeve was refused or did not fill")

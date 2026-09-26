@@ -50,6 +50,13 @@ class ConfigTest {
     }
 
     @Test
+    fun `refuses the dip sleeve beside the sleeves it replaced, which would count the same dollars`() {
+        assertThatThrownBy { load("TICKGUARD_SLEEVE_D" to "DRY_RUN", "TICKGUARD_SLEEVE_A" to "LIVE") }
+            .isInstanceOf(ConfigError::class.java)
+        assertThat(load("TICKGUARD_SLEEVE_D" to "LIVE").trading.modes["D"]).isEqualTo(tickguard.trading.SleeveMode.LIVE)
+    }
+
+    @Test
     fun `reads the escalation step as a ratio, rejecting a percent`() {
         assertThat(load("TICKGUARD_DRAWDOWN_ESCALATE" to "0.05").rules.drawdownEscalateEvery).isEqualTo("0.05")
         assertThatThrownBy { load("TICKGUARD_DRAWDOWN_ESCALATE" to "2") }.isInstanceOf(ConfigError::class.java)

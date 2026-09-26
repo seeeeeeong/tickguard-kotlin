@@ -39,4 +39,14 @@ class SleeveDeskTest {
         assertThat(waiting(monthly, monday, null, tuesday.plusSeconds(7 * 3600), listOf("D"))).isEmpty()
         assertThat(waiting(emptyList(), null, null, tuesday, listOf("D"))).isEmpty()
     }
+
+    @Test
+    fun `flags a held symbol whose shares in the account differ from the ledger, but not the user's own`() {
+        fun d(text: String) = Decimal.parse(text, "test")
+        val account = mapOf("AAPL" to d("0.6"), "SPY" to d("1.2"), "AMZN" to d("3"))
+        val ledger = mapOf("AAPL" to d("0.3"), "SPY" to d("1.2"), "AMZN" to d("1"))
+
+        // AAPL doubled: a split the ledger predates, or an order no sleeve recorded.
+        assertThat(mismatched(account, ledger, listOf("AAPL", "SPY", "AMZN"), setOf("AMZN"))).containsExactly("AAPL")
+    }
 }

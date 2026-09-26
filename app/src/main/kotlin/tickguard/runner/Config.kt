@@ -251,6 +251,13 @@ private fun tradingConfig(env: (String) -> String?): TradingConfig {
                     ?: throw ConfigError("$key must be OFF, DRY_RUN or LIVE. Got \"$value\".")
             )
         }
+    // The dip sleeve replaced the three-sleeve test in the same account: run together, each would count
+    // the same dollars as its own cash.
+    val dips = TestSleeves.ALL.filter { it.dip != null }.map { it.id }
+    val on = modes.filterValues { it != SleeveMode.OFF }.keys
+    if (on.any { it in dips } && on.any { it !in dips }) {
+        throw ConfigError("TICKGUARD_SLEEVE_D cannot run with A, B or C on: turn those OFF. On: ${on.joinToString()}.")
+    }
     return TradingConfig(enabled = env("TICKGUARD_TRADING")?.trim() == "on", modes = modes)
 }
 

@@ -299,29 +299,27 @@ internal class SleeveDesk(
     }
 
     /**
-     * Why the account contradicts the ledger, or null if it does not: more
-     * of a dip sleeve's parking symbol than every sleeve's fills explain
-     * means an order was placed whose sleeve was never recorded, and the
-     * sleeve would spend that money again. Only the parking symbol is
-     * checked: the user holds none of it, while any of the dip symbols may
-     * also be the user's own. It is also where most of the money sits.
+     * Why the account contradicts the ledger, or null if it does not; see
+     * [mismatched]. Checked for the dip sleeves that are on.
      */
     private suspend fun untracked(owned: Map<String, List<Order>>): String? {
-        val parking =
-            TestSleeves.ALL
-                .filter { (trading.modes[it.id] ?: SleeveMode.OFF) != SleeveMode.OFF }
-                .mapNotNull { it.dip?.parking }
-                .distinct()
-        if (parking.isEmpty()) return null
-        val held = account()
-        val ledger =
-            TestSleeves.ALL.map { position(it, owned[it.id].orEmpty()).holdings }
-        val extra =
-            parking.filter { code ->
-                val recorded = ledger.fold(Decimal.ZERO) { sum, holdings -> sum + (holdings[code] ?: Decimal.ZERO) }
-                (held[code] ?: Decimal.ZERO) - recorded > SHARE_TOLERANCE
+        val dips =
+            TestSleeves.ALL.filter {
+                it.dip != null && (trading.modes[it.id] ?: SleeveMode.OFF) != SleeveMode.OFF
             }
-        return extra.takeIf { it.isNotEmpty() }?.let { "계좌 보유가 장부보다 많음: ${it.joinToString()} — 기록 안 된 주문 확인 필요" }
+        if (dips.isEmpty()) return null
+        val ledger = LinkedHashMap<String, Decimal>()
+        TestSleeves.ALL.forEach { sleeve ->
+            position(sleeve, owned[sleeve.id].orEmpty()).holdings.forEach { (code, quantity) ->
+                ledger[code] = (ledger[code] ?: Decimal.ZERO) + quantity
+            }
+        }
+        val held =
+            dips.flatMap { position(it, owned[it.id].orEmpty()).holdings.keys } + dips.mapNotNull { it.dip?.parking }
+        val off = mismatched(account(), ledger, held.distinct(), TestSleeves.PERSONAL)
+        return off.takeIf { it.isNotEmpty() }?.let {
+            "계좌 수량이 장부와 다름: ${it.joinToString()} — 기록 안 된 주문이나 주식 분할 확인 필요"
+        }
     }
 
     private fun clockTime(at: Instant?) = at?.let { CLOCK.format(it) }.orEmpty()
@@ -497,9 +495,6 @@ internal class SleeveDesk(
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
 
-        /** Shares the account and the ledger may differ by: fills are quoted to six places. */
-        val SHARE_TOLERANCE: Decimal = Decimal.parse("0.0001", "tolerance")
-
         /** Far enough back to cross a long weekend when looking for the last close before a session. */
         const val LOOKBACK_DAYS = 10L
 
@@ -547,6 +542,25 @@ internal fun waiting(
     if (madeAt == null || executedFor == madeAt || Duration.between(madeAt, now) > PROPOSAL_LIFETIME) return emptyList()
     return proposals.filter { it.sleeve.id !in covered }
 }
+
+/**
+ * The symbols among [checked] whose shares in the account differ from what
+ * every sleeve's fills explain: an order whose sleeve was never recorded, a
+ * split the ledger's quantities predate, or a sale by hand. The user's own
+ * symbols are left out, since the account holds those beside the sleeves.
+ */
+internal fun mismatched(
+    account: Map<String, Decimal>,
+    ledger: Map<String, Decimal>,
+    checked: List<String>,
+    personal: Set<String>,
+): List<String> =
+    checked.filter { code ->
+        code !in personal && ((account[code] ?: Decimal.ZERO) - (ledger[code] ?: Decimal.ZERO)).abs() > SHARE_TOLERANCE
+    }
+
+/** Shares the account and the ledger may differ by: fills are quoted to six places. */
+private val SHARE_TOLERANCE: Decimal = Decimal.parse("0.0001", "tolerance")
 
 /** A run of the plan, placed or listed, for the control page. */
 internal data class LastRun(

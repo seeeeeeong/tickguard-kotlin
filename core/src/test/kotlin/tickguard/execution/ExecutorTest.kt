@@ -171,6 +171,35 @@ class ExecutorTest {
         }
 
     @Test
+    fun `sends a sleeve's buys only once its sales have filled`() =
+        runTest {
+            val sell = OrderRequest("tg-20261102-D-S-SPY", "D", "SPY", Side.SELL, null, decimal("0.2"))
+            val dipBuy = OrderRequest("tg-20261102-D-B-AAPL", "D", "AAPL", Side.BUY, decimal("100"), null)
+            val otherSleeve = OrderRequest("tg-20261102-A-B-GLD", "A", "GLD", Side.BUY, decimal("10"), null)
+            val waitedFor = mutableListOf<List<String>>()
+
+            fun executor(fills: Boolean) =
+                Executor({ PlaceOutcome.Placed("o-${it.symbol}") }, tags, NoJournal) { ids ->
+                    waitedFor += ids
+                    fills
+                }
+
+            val unfilled =
+                executor(
+                    fills = false,
+                ).run(OrderPlan(listOf(sell, otherSleeve, dipBuy), emptyList(), emptyList()))
+            val filled =
+                executor(
+                    fills = true,
+                ).run(OrderPlan(listOf(sell, otherSleeve, dipBuy), emptyList(), emptyList()))
+
+            assertThat(unfilled.placed.map { it.first.symbol }).containsExactly("SPY", "GLD")
+            assertThat(unfilled.refused.map { it.first.symbol }).containsExactly("AAPL")
+            assertThat(filled.placed.map { it.first.symbol }).containsExactly("SPY", "GLD", "AAPL")
+            assertThat(waitedFor).containsExactly(listOf("o-SPY"), listOf("o-SPY"))
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

@@ -94,6 +94,8 @@ class Executor(
                     halted = "${request.clientOrderId}: $why"
                     stop = request to reason
                 }
+                // Switched off between the journal and the request: the run ends here too.
+                off = refused.lastOrNull()?.let { it.first == request && it.second === SWITCHED_OFF } == true
             }
         }
         return ExecutionResult(placed, refused, stop)

@@ -273,15 +273,16 @@ class ExecutorTest {
                     PlaceOutcome.Placed("o")
                 }, tags, journal)
 
-            // Live at the check before the journal, off by the check after it.
-            val result = executor.run(OrderPlan(listOf(buy("SPY")), emptyList(), emptyList())) { ++asked <= 2 }
+            // Live at the checks before the journal, off at the one after it, then on again for the next order.
+            val result =
+                executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList())) {
+                    ++asked !=
+                        3
+                }
 
             assertThat(sent).isEmpty()
-            assertThat(
-                result.refused
-                    .single()
-                    .second.message,
-            ).isEqualTo("switched off during the run")
+            assertThat(result.refused.map { it.first.symbol to it.second.message })
+                .containsExactly("SPY" to "switched off during the run", "QQQ" to "switched off during the run")
             assertThat(journal.pending()).isEmpty()
         }
 

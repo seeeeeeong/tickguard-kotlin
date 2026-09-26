@@ -114,6 +114,11 @@ data class Config(
     val tickRetention: Duration,
     val store: StoreConfig,
     val metricsPort: Int,
+    /**
+     * Where orders about to be sent are journalled: beside the database by
+     * default, on the volume that outlives the container.
+     */
+    val placements: String = "placements",
 ) {
     override fun toString() = "Config(accountSeq=$accountSeq, extraSymbols=$extraSymbols, rules=$rules, llm=$llm, …)"
 }
@@ -180,6 +185,7 @@ fun loadConfig(env: (String) -> String?): Config {
         tickRetention = read.integer("TICKGUARD_TICK_RETENTION_DAYS", DEFAULT_RETENTION_DAYS, minimum = 1).days,
         store = storeConfig(read, env),
         metricsPort = read.integer("TICKGUARD_METRICS_PORT", DEFAULT_METRICS_PORT),
+        placements = placements(env),
     )
 }
 
@@ -211,6 +217,26 @@ private fun storeConfig(
 }
 
 /**
+ * Where the placement journal lives: set, or beside the SQLite file. With
+ * Postgres and trading on it must be set or derivable, since the working
+ * directory of a container does not outlive it, and a lost journal entry is
+ * an order whose money would be spent again.
+ */
+private fun placements(env: (String) -> String?): String {
+    val set = env("TICKGUARD_PLACEMENTS")?.takeIf { it.isNotBlank() }
+    val file = env("TICKGUARD_DB")?.takeIf { it.isNotBlank() }
+    val unsafe = !env("TICKGUARD_PG_URL").isNullOrBlank() && env("TICKGUARD_TRADING")?.trim() == "on"
+    if (set == null && file == null && unsafe) {
+        throw ConfigError("TICKGUARD_PLACEMENTS must name a directory on a persistent volume when trading on Postgres.")
+    }
+    return set ?: java.nio.file.Path
+        .of(file ?: "tickguard.db")
+        .toAbsolutePath()
+        .resolveSibling("placements")
+        .toString()
+}
+
+/**
  * `TICKGUARD_TRADING=on` and `TICKGUARD_SLEEVE_A=LIVE`. Anything but an exact
  * "on" is off, and a mode that is not one of the three is refused at boot:
  * a typo must not decide whether money moves.
@@ -225,6 +251,13 @@ private fun tradingConfig(env: (String) -> String?): TradingConfig {
                     ?: throw ConfigError("$key must be OFF, DRY_RUN or LIVE. Got \"$value\".")
             )
         }
+    // The dip sleeve replaced the three-sleeve test in the same account: run together, each would count
+    // the same dollars as its own cash.
+    val dips = TestSleeves.ALL.filter { it.dip != null }.map { it.id }
+    val on = modes.filterValues { it != SleeveMode.OFF }.keys
+    if (on.any { it in dips } && on.any { it !in dips }) {
+        throw ConfigError("TICKGUARD_SLEEVE_D cannot run with A, B or C on: turn those OFF. On: ${on.joinToString()}.")
+    }
     return TradingConfig(enabled = env("TICKGUARD_TRADING")?.trim() == "on", modes = modes)
 }
 

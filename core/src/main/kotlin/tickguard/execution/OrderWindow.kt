@@ -36,6 +36,24 @@ fun orderWindowEnd(
         ?.to
         ?.minus(BEFORE_CLOSE)
 
+/**
+ * The date of the last regular session that has closed by [now], from the
+ * calendar's session names ("2026-11-02 regularMarket"), or null when none
+ * has: the close a proposal must be priced on.
+ */
+fun lastSession(
+    hours: MarketHours?,
+    now: Instant,
+): java.time.LocalDate? =
+    hours
+        ?.sessions
+        .orEmpty()
+        .filter { it.name.endsWith("regularMarket") && !it.to.isAfter(now) }
+        .maxByOrNull { it.to }
+        ?.name
+        ?.substringBefore(" ")
+        ?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+
 /** The calendar's order window, opening to closing, or null without a regular session. */
 fun orderWindow(hours: MarketHours?): ClosedRange<Instant>? =
     hours

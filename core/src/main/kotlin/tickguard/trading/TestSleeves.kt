@@ -48,6 +48,20 @@ object TestSleeves {
             "SPCX",
         )
 
+    /** Where the dip sleeve's idle money waits, and the series its closes are checked by. */
+    const val PARKING = "SPY"
+
+    /** The dip sleeve's capital: the account's dollars on 2026-09-25, as the user set it. Code, not configuration. */
+    val DIP_CAPITAL: Decimal = Decimal.parse("733.98", "dip capital")
+
+    /**
+     * The momentum sleeve's large caps without the user's own holdings
+     * (AMZN, GOOGL, SPCX): the account holds those beside any sleeve, so a
+     * sleeve's shares of them could not be checked against the account's.
+     * SPY is where the sleeve's idle money waits.
+     */
+    private val DIP_SYMBOLS = MOMENTUM - PERSONAL
+
     private fun won(amount: Long) = Decimal.of(amount) / FX
 
     /** Vanguard's five-point threshold, for every sleeve. */
@@ -85,6 +99,17 @@ object TestSleeves {
                 BAND,
                 Decimal.parse("0.30", "loss"),
                 LossAction.STOP_SLEEVE,
+            ),
+            Sleeve(
+                "D",
+                "D 반등형",
+                DIP_CAPITAL,
+                DIP_SYMBOLS + PARKING,
+                ::BuyAndHold,
+                BAND,
+                Decimal.parse("0.40", "loss"),
+                LossAction.STOP_BUYING,
+                DipRules(parking = PARKING),
             ),
         )
 }

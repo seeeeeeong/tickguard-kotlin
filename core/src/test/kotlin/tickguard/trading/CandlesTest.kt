@@ -96,7 +96,15 @@ class CandlesTest {
             val refreshed = refreshBars(rest, store, listOf("A", "B"), LocalDate.parse("2026-03-20"))
             refreshBars(rest, store, listOf("A"), LocalDate.parse("2026-03-20"))
 
-            assertThat(refreshed).isEqualTo(RefreshedBars(written = 4, unreadable = emptyList()))
+            val days = setOf(LocalDate.parse("2026-03-25"), LocalDate.parse("2026-03-24"))
+            assertThat(refreshed).isEqualTo(
+                RefreshedBars(
+                    written = 4,
+                    unreadable = emptyList(),
+                    fetched =
+                        mapOf("A" to days, "B" to days),
+                ),
+            )
             assertThat(
                 stored.keys.map {
                     "${it.first} ${it.second}"

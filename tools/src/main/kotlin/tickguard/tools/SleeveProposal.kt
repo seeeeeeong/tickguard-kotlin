@@ -3,10 +3,13 @@ package tickguard.tools
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import tickguard.stream.Decimal
+import tickguard.time.SEOUL
 import tickguard.trading.SleeveProposal
 import tickguard.trading.TestSleeves
 import tickguard.trading.attribute
+import tickguard.trading.lots
 import tickguard.trading.position
+import tickguard.trading.proposeDip
 import tickguard.trading.proposeRebalance
 import java.time.LocalDate
 import kotlin.system.exitProcess
@@ -28,12 +31,22 @@ suspend fun main(args: Array<String>) {
     }
     val store = openStore(environment())
     try {
-        val today = LocalDate.now()
+        // The service's date: a container runs in UTC, a day behind Seoul for nine hours of it.
+        val today = LocalDate.now(SEOUL)
         val orders = store.ordersSince(TestSleeves.START)
         val owned = attribute(orders, TestSleeves.ALL, store.orderTags(), TestSleeves.PERSONAL, TestSleeves.START)
         for (sleeve in TestSleeves.ALL) {
             val bars = sleeve.universe.associateWith { store.bars(it, today.minusYears(2), today.minusDays(1)) }
-            val proposal = proposeRebalance(sleeve, position(sleeve, owned[sleeve.id].orEmpty()), bars)
+            val mine = owned[sleeve.id].orEmpty()
+            val position = position(sleeve, mine)
+            // The same proposer the service runs for each sleeve.
+            val rules = sleeve.dip
+            val proposal =
+                if (rules == null) {
+                    proposeRebalance(sleeve, position, bars)
+                } else {
+                    proposeDip(sleeve, position, lots(mine), bars, rules)
+                }
             println(proposal?.let { text(it, fx) } ?: "== ${sleeve.name}: 일봉 없음")
         }
     } finally {

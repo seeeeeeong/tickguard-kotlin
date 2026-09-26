@@ -33,6 +33,8 @@ data class Sleeve(
     /** A fall of this fraction from the capital triggers [lossAction]. */
     val lossLimit: Decimal,
     val lossAction: LossAction,
+    /** Set for a sleeve that trades dips every weekday instead of rebalancing monthly to [strategy]. */
+    val dip: DipRules? = null,
 )
 
 /** What a sleeve holds, and what it has left to spend, from its attributed fills. */
@@ -52,6 +54,10 @@ data class SleevePosition(
  * can only have been that sleeve's. A symbol the account also holds for
  * itself is never guessed: untagged, it is a personal trade.
  * Orders placed before [since] predate the test and belong to nobody.
+ * A dip sleeve claims only tagged orders: it trades only through the
+ * executor, which tags every order, and its symbols overlap the others', so
+ * counting it as an owner would take untagged orders from the sleeve that
+ * placed them.
  */
 fun attribute(
     orders: List<Order>,
@@ -60,7 +66,11 @@ fun attribute(
     personal: Set<String>,
     since: Instant,
 ): Map<String, List<Order>> {
-    val owners = sleeves.flatMap { s -> s.universe.map { it to s.id } }.groupBy({ it.first }, { it.second })
+    val owners =
+        sleeves
+            .filter { it.dip == null }
+            .flatMap { s -> s.universe.map { it to s.id } }
+            .groupBy({ it.first }, { it.second })
     return orders
         .filter { !it.orderedAt.isBefore(since) }
         .mapNotNull { order ->

@@ -172,4 +172,23 @@ class OrderPlanTest {
         assertThat(id).isEqualTo("tg-20261102-C-B-BRK_B").matches("^[a-zA-Z0-9\\-_]+$")
         assertThat(id.length).isLessThanOrEqualTo(36)
     }
+
+    @Test
+    fun `gives each sleeve its cash as budget, less a dip sleeve's buffer`() {
+        val dip = sleeve("D", "SPY").copy(dip = tickguard.trading.DipRules())
+        val plan =
+            planOrders(
+                listOf(proposal(sleeve("A", "SPY")), proposal(dip)),
+                mapOf("A" to SleeveMode.LIVE, "D" to SleeveMode.LIVE),
+                limits,
+                day,
+            )
+
+        assertThat(plan.cash.mapValues { it.value.format(2) }).containsExactly(
+            org.assertj.core.api.Assertions
+                .entry("A", "0.00"),
+            org.assertj.core.api.Assertions
+                .entry("D", "-2.00"),
+        )
+    }
 }

@@ -13,6 +13,9 @@ import java.time.format.DateTimeFormatter
  */
 val SEOUL: ZoneId = ZoneId.of("Asia/Seoul")
 
+/** The US exchanges' zone, for the local date the US market calendar is asked by. */
+val NEW_YORK: ZoneId = ZoneId.of("America/New_York")
+
 /** Pinned to Seoul, so formatting cannot fall back to the host's zone. */
 private val DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(SEOUL)
 

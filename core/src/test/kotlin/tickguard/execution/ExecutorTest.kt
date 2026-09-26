@@ -63,6 +63,150 @@ class ExecutorTest {
         }
 
     @Test
+    fun `halts when an accepted order's sleeve cannot be recorded, since its money would be spent again`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val broken =
+                object : tickguard.orders.OrderStore by ScriptedOrders(Recorded.REPEAT) {
+                    override suspend fun tagOrder(
+                        orderId: String,
+                        sleeve: String,
+                    ): Unit = error("database is down")
+                }
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("o-${it.symbol}")
+                }, broken)
+
+            val result = executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList()))
+
+            assertThat(sent).containsExactly("SPY")
+            assertThat(result.placed.map { it.second }).containsExactly("o-SPY")
+            assertThat(result.haltedAt?.second).isEqualTo("sleeve not recorded")
+            assertThat(executor.halted).contains("o-SPY").contains("database is down")
+        }
+
+    @Test
+    fun `journals each order around its request, keeps the unaccounted one, and starts halted on it`() =
+        runTest {
+            val journal = MemoryJournal()
+            val first =
+                Executor({
+                    if (it.symbol == "QQQ") PlaceOutcome.Unknown("timeout") else PlaceOutcome.Placed("o-${it.symbol}")
+                }, tags, journal)
+
+            first.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList()))
+
+            assertThat(journal.pending()).containsExactly("tg-20261102-A-B-QQQ")
+            val restarted = Executor({ PlaceOutcome.Placed("never") }, tags, journal)
+            assertThat(restarted.halted).contains("tg-20261102-A-B-QQQ")
+            assertThat(restarted.run(OrderPlan(listOf(buy("GLD")), emptyList(), emptyList())).placed).isEmpty()
+        }
+
+    @Test
+    fun `sends nothing when the journal cannot be written`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val unwritable =
+                object : PlacementJournal by NoJournal {
+                    override fun begin(request: OrderRequest): Unit = error("disk full")
+                }
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("x")
+                }, tags, unwritable)
+
+            executor.run(OrderPlan(listOf(buy("SPY")), emptyList(), emptyList()))
+
+            assertThat(sent).isEmpty()
+            assertThat(executor.halted).contains("disk full")
+        }
+
+    @Test
+    fun `halts when an accounted order's journal entry cannot be removed`() =
+        runTest {
+            val stuck =
+                object : PlacementJournal by NoJournal {
+                    override fun done(request: OrderRequest): Unit = error("read-only")
+                }
+            val executor = Executor({ PlaceOutcome.Placed("o-${it.symbol}") }, tags, stuck)
+
+            val result = executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList()))
+
+            assertThat(result.placed.map { it.second }).containsExactly("o-SPY")
+            assertThat(result.haltedAt?.second).isEqualTo("journal not cleared")
+            assertThat(executor.halted).contains("read-only")
+        }
+
+    @Test
+    fun `sends none of a sleeve's buys once one of its sales is refused`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val sell = OrderRequest("tg-20261102-D-S-SPY", "D", "SPY", Side.SELL, null, decimal("0.2"))
+            val otherSleeve = OrderRequest("tg-20261102-A-B-GLD", "A", "GLD", Side.BUY, decimal("10"), null)
+            val dipBuy = OrderRequest("tg-20261102-D-B-AAPL", "D", "AAPL", Side.BUY, decimal("100"), null)
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    if (it.side ==
+                        Side.SELL
+                    ) {
+                        PlaceOutcome.Refused(422, "insufficient-quantity", "no")
+                    } else {
+                        PlaceOutcome.Placed("o")
+                    }
+                }, tags)
+
+            val result = executor.run(OrderPlan(listOf(sell, otherSleeve, dipBuy), emptyList(), emptyList()))
+
+            assertThat(sent).containsExactly("SPY", "GLD")
+            assertThat(
+                result.refused.map {
+                    it.first.symbol to it.second.code
+                },
+            ).containsExactly("SPY" to "insufficient-quantity", "AAPL" to "not-sent")
+            assertThat(executor.halted).isNull()
+        }
+
+    @Test
+    fun `sends a sleeve's buys only once its sales have filled, and only as far as they brought`() =
+        runTest {
+            val sell = OrderRequest("tg-20261102-D-S-SPY", "D", "SPY", Side.SELL, null, decimal("0.2"))
+            val dipBuy = OrderRequest("tg-20261102-D-B-AAPL", "D", "AAPL", Side.BUY, decimal("100"), null)
+            val otherSleeve = OrderRequest("tg-20261102-A-B-GLD", "A", "GLD", Side.BUY, decimal("10"), null)
+            val waitedFor = mutableListOf<List<String>>()
+
+            suspend fun run(proceeds: String?): ExecutionResult {
+                val executor =
+                    Executor({ PlaceOutcome.Placed("o-${it.symbol}") }, tags, NoJournal) { ids ->
+                        waitedFor += ids
+                        proceeds?.let(::decimal)
+                    }
+                val plan =
+                    OrderPlan(
+                        listOf(sell, otherSleeve, dipBuy),
+                        emptyList(),
+                        emptyList(),
+                        mapOf("D" to decimal("3")),
+                    )
+                return executor.run(plan)
+            }
+
+            val unfilled = run(proceeds = null)
+            // SPY gapped down: $3 of cash and $95 of proceeds do not cover a $100 buy.
+            val short = run(proceeds = "95")
+            val enough = run(proceeds = "97")
+
+            assertThat(unfilled.placed.map { it.first.symbol }).containsExactly("SPY", "GLD")
+            assertThat(unfilled.refused.map { it.first.symbol }).containsExactly("AAPL")
+            assertThat(short.refused.map { it.first.symbol }).containsExactly("AAPL")
+            assertThat(enough.placed.map { it.first.symbol }).containsExactly("SPY", "GLD", "AAPL")
+            assertThat(waitedFor).containsExactly(listOf("o-SPY"), listOf("o-SPY"), listOf("o-SPY"))
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()
@@ -88,4 +232,19 @@ private class TaggingOrders : tickguard.orders.OrderStore by ScriptedOrders(Reco
     ) {
         tagged += orderId to sleeve
     }
+}
+
+/** The journal in memory, shared between two executors as a restart would share the directory. */
+private class MemoryJournal : PlacementJournal {
+    private val open = LinkedHashSet<String>()
+
+    override fun begin(request: OrderRequest) {
+        open += request.clientOrderId
+    }
+
+    override fun done(request: OrderRequest) {
+        open -= request.clientOrderId
+    }
+
+    override fun pending(): List<String> = open.toList()
 }

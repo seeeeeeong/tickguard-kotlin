@@ -62,6 +62,27 @@ class Calendar(
     ): Boolean = cache[market]?.sessions?.any { at >= it.from && at < it.to } ?: false
 
     fun hours(market: Market): MarketHours? = cache[market]
+
+    /**
+     * The market's sessions as of its own local [date], not cached: the
+     * given day and the business day before it. Asked by the exchange's
+     * date, the day before is always a session that has closed, which the
+     * Seoul-dated calendar stops naming after midnight in Seoul.
+     */
+    suspend fun on(
+        market: Market,
+        date: java.time.LocalDate,
+    ): MarketHours? {
+        val body =
+            rest.get(
+                RequestSpec(
+                    "/api/v1/market-calendar/$market",
+                    RateLimitGroup.MARKET_INFO,
+                    mapOf("date" to date.toString()),
+                ),
+            )
+        return parseCalendar(market, body)
+    }
 }
 
 /** The session kinds either market can list, in the order they run. */

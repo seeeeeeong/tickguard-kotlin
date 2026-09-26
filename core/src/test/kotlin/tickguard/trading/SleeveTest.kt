@@ -78,6 +78,23 @@ class SleeveTest {
     }
 
     @Test
+    fun `leaves untagged orders with the sleeve that placed them when a dip sleeve shares its symbols`() {
+        val dip = sleeve("D", "SPY", "AAPL").copy(dip = DipRules())
+
+        val owned =
+            attribute(
+                listOf(filled("1", "SPY"), filled("2", "AAPL"), filled("3", "SPY")),
+                listOf(a, c, dip),
+                tagged = mapOf("3" to "D"),
+                personal = emptySet(),
+                since = start,
+            )
+
+        assertThat(owned.mapValues { (_, list) -> list.map { it.orderId } })
+            .isEqualTo(mapOf("A" to listOf("1"), "C" to listOf("2"), "D" to listOf("3")))
+    }
+
+    @Test
     fun `holds what was bought less what was sold, with cash net of fees`() {
         val orders =
             listOf(

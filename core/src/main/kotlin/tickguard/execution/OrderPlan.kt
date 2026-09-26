@@ -43,6 +43,8 @@ data class OrderPlan(
     /** For sleeves in DRY_RUN: built the same way, never sent. */
     val dryRun: List<OrderRequest>,
     val skipped: List<SkippedTrade>,
+    /** Each sleeve's cash when it was proposed: with its sales' proceeds, all its buys may spend. */
+    val cash: Map<String, Decimal> = emptyMap(),
 )
 
 /** The smallest buy worth sending: below a dollar a fee or a rounding rule can be most of the order. */
@@ -114,8 +116,12 @@ fun planOrders(
             }
         }
     }
-    return OrderPlan(live, dryRun, skipped)
+    return OrderPlan(live, dryRun, skipped, budgets(proposals))
 }
+
+/** Each sleeve's cash, less the buffer a dip sleeve keeps out of it for fees and a fill above the close. */
+private fun budgets(proposals: List<SleeveProposal>): Map<String, Decimal> =
+    proposals.associate { it.sleeve.id to it.position.cash - (it.sleeve.dip?.buffer ?: Decimal.ZERO) }
 
 /** Why [request] must not go out, or null when it may. The run's totals apply to live orders only. */
 @Suppress("LongParameterList") // One order against every limit it is held to.

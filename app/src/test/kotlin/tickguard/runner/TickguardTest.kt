@@ -1,5 +1,6 @@
 package tickguard.runner
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,11 +25,15 @@ import okhttp3.WebSocketListener
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import tickguard.orders.OrderSource
 import tickguard.store.sqlite.SqliteStore
 import tickguard.stream.Decimal
+import tickguard.testing.order
 import tickguard.time.SEOUL
 import tickguard.trading.Bar
+import tickguard.trading.TestSleeves
 import java.nio.file.Files
+import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -71,10 +76,13 @@ class TickguardTest {
     /**
      * Open from an hour ago to three hours from now: the SLA watcher counts the
      * market open, and the order window (ten minutes after the open to an hour
-     * before the close) is open too.
+     * before the close) is open too. Yesterday's session has closed, so the
+     * seeded bars, which end yesterday, are the latest.
      */
     private fun calendar() =
-        """{"result":{"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(3)}"}}}}"""
+        """{"result":{"previousBusinessDay":{"date":"$previousSession",""" +
+            """"regularMarket":{"startTime":"${seoul(-30)}","endTime":"${seoul(-24)}"}},""" +
+            """"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(3)}"}}}}"""
 
     /** One fresh headline about AAPL, published ten minutes ago. */
     private fun feed() =
@@ -113,6 +121,28 @@ class TickguardTest {
             """"averageFilledPrice":"100","filledAmount":"100","commission":"0.1","tax":"0",""" +
             """"settlementDate":null}}}}"""
 
+    /** The date of the last closed US session the fake calendar reports. */
+    @Volatile private var previousSession = LocalDate.now(SEOUL).minusDays(1)
+
+    /** The date the fake's candles end on; the last closed session unless a test says otherwise. */
+    @Volatile private var candleDay: LocalDate? = null
+
+    /** Symbols the fake has no candles for. */
+    @Volatile private var noCandles: Set<String> = emptySet()
+
+    /** One bar for [code], dated the fake calendar's last closed session, flat at 100 like the seeded ones. */
+    private fun candles(code: String?): String {
+        val bar =
+            """{"timestamp":"${candleDay ?: previousSession}T16:00:00-04:00","openPrice":"100",""" +
+                """"highPrice":"100","lowPrice":"100","closePrice":"100","volume":"1"}"""
+        val rows = if (code == null || code in noCandles) "" else bar
+        return """{"result":{"candles":[$rows],"nextBefore":null}}"""
+    }
+
+    /** The account's holdings as the fake answers them. */
+    @Volatile private var heldJson =
+        """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+
     private inner class FakeToss : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
             val path = request.url.encodedPath
@@ -126,10 +156,7 @@ class TickguardTest {
                 }
 
                 path == "/api/v1/holdings" -> {
-                    json(
-                        """{"result":{"items":[""" +
-                            """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}]}}""",
-                    )
+                    json("""{"result":{"items":[$heldJson]}}""")
                 }
 
                 path == "/api/v1/orders" && request.method == "POST" -> {
@@ -139,6 +166,10 @@ class TickguardTest {
 
                 path == "/api/v1/orders" -> {
                     json("""{"result":{"orders":[],"nextCursor":null,"hasNext":false}}""")
+                }
+
+                path == "/api/v1/candles" -> {
+                    json(candles(request.url.queryParameter("symbol")))
                 }
 
                 path == "/api/v1/exchange-rate" -> {
@@ -216,6 +247,8 @@ class TickguardTest {
                 "TOSS_CLIENT_ID" to "id",
                 "TOSS_CLIENT_SECRET" to "secret",
                 "TOSS_ACCOUNT_SEQ" to "1",
+                // Each app its own journal: an order left in one must not halt the next test.
+                "TICKGUARD_PLACEMENTS" to Files.createTempDirectory("placements-").toString(),
                 "TICKGUARD_DRAWDOWN_FOR_MS" to "1",
                 "TICKGUARD_GROUP_WAIT_MS" to "1",
             ) + extra
@@ -341,6 +374,27 @@ class TickguardTest {
             }
         }
 
+    /** The dip sleeve's candidates, flat at 100 for 210 days to yesterday: enough history, and no dip. */
+    private suspend fun seedDipBars(store: SqliteStore) {
+        val yesterday = LocalDate.now(SEOUL).minusDays(1)
+        val dip = TestSleeves.ALL.single { it.dip != null }
+        store.recordBars(
+            dip.universe.filter { it != "SPY" }.flatMap { code ->
+                (0L until 210L).map { back ->
+                    Bar(
+                        code,
+                        yesterday.minusDays(back),
+                        Decimal.HUNDRED,
+                        Decimal.HUNDRED,
+                        Decimal.HUNDRED,
+                        Decimal.HUNDRED,
+                        Decimal.ONE,
+                    )
+                }
+            },
+        )
+    }
+
     /** Sleeve A's five ETFs, flat at 100 for the last three days: its opening proposal buys each for a fifth. */
     private suspend fun seedCoreBars(store: SqliteStore) {
         val yesterday = LocalDate.now(SEOUL).minusDays(1)
@@ -419,9 +473,20 @@ class TickguardTest {
                 eventually { alerts.any { "리밸런싱 실행" in it && "✔ A BUY SPY" in it } }
                 assertThat(orderPosts).hasSize(5)
                 assertThat(app.sleeves.describe()).contains("A:LIVE").contains("LIVE until")
+                // The same proposal never goes out twice, whatever the client order ids' ten minutes.
+                assertThat(app.sleeves.goLive()).isEqualTo("already placed")
 
                 app.sleeves.stop()
                 assertThat(app.sleeves.goLive()).isEqualTo("trading is off")
+                // The fills the order stream would have delivered: the ledger knows every tagged order.
+                (1..5).forEach { n ->
+                    store.recordOrder(
+                        order("placed-$n", status = "FILLED", symbol = "SPY", price = null, orderedAt = Instant.now()),
+                        "FILL",
+                        OrderSource.STREAM,
+                        Instant.now(),
+                    )
+                }
                 withContext(engine.coroutineContext) {
                     app.sleeves.propose(force = true)
                     app.sleeves.execute()
@@ -429,6 +494,297 @@ class TickguardTest {
                 assertThat(orderPosts).hasSize(5)
                 assertThat(app.sleeves.describe()).startsWith("STOPPED")
 
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `runs the dip sleeve, listing its orders first and on LIVE parking its capital in SPY under its own tag`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                // The account holds only the user's own symbols, none the dip sleeve trades.
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "DRY_RUN"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "리밸런싱 실행" in it && "· DRY_RUN D BUY SPY \$731.98" in it } }
+                assertThat(orderPosts).isEmpty()
+                // Sleeve A is off: only the dip sleeve proposes.
+                assertThat(app.sleeves.proposals.map { it.sleeve.id }).containsExactly("D")
+
+                assertThat(app.sleeves.goLive()).isNull()
+                eventually { alerts.any { "리밸런싱 실행" in it && "✔ D BUY SPY \$731.98" in it } }
+                assertThat(orderPosts).hasSize(1)
+                assertThat(orderPosts.single()).contains("\"symbol\":\"SPY\"").contains("\"orderAmount\":\"731.98\"")
+                assertThat(store.orderTags().values).containsExactly("D")
+
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `halts instead of trading when the account holds parked SPY the ledger never recorded`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"SPY","marketCountry":"US","quantity":"1.5","averagePurchasePrice":"500"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "자동 주문 중지" in it && "SPY" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                assertThat(orderPosts).isEmpty()
+                assertThat(app.sleeves.halted()).isTrue()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `halts when an order tagged to the dip sleeve never reached the ledger`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                // Accepted and tagged, then the process died before the fill was recorded.
+                store.tagOrder("lost-order", "D")
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "자동 주문 중지" in it && "장부에 없는 주문" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `places nothing for the dip sleeve while its bars end a session before the calendar's last`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                // The bars end yesterday, but the calendar says today's session has already closed.
+                previousSession = LocalDate.now(SEOUL)
+                candleDay = LocalDate.now(SEOUL).minusDays(1)
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    val failure =
+                        try {
+                            app.sleeves.propose(force = true)
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (expected: IllegalStateException) {
+                            expected
+                        }
+                    assertThat(failure).hasMessageContaining("the last US session")
+                    app.sleeves.execute()
+                }
+
+                assertThat(app.sleeves.proposals).isEmpty()
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `fails the dip proposal, to try again, while its parking symbol has no current bar`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                // The candidates are current, SPY has no bars at all.
+                noCandles = setOf("SPY")
+                seedDipBars(store)
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    val failure =
+                        try {
+                            app.sleeves.propose(force = true)
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (expected: IllegalStateException) {
+                            expected
+                        }
+                    assertThat(failure).hasMessageContaining("SPY not refreshed through the last US session")
+                }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `halts rather than buy a symbol the account already holds outside the dip sleeve`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                // AAPL bought by hand: the dip sleeve holds none of it, but may buy it.
+                heldJson = """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "자동 주문 중지" in it && "AAPL" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `reports at once a halt it starts with, from an order a previous process never accounted for`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                val journal = Files.createTempDirectory("placements-")
+                Files.writeString(journal.resolve("tg-20260928-D-B-SPY"), "D BUY SPY\n")
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf(
+                            "TICKGUARD_TRADING" to "on",
+                            "TICKGUARD_SLEEVE_D" to "LIVE",
+                            "TICKGUARD_PLACEMENTS" to journal.toString(),
+                        ),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                eventually { alerts.any { "자동 주문 중지" in it && "tg-20260928-D-B-SPY" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+                assertThat(alerts.filter { "자동 주문 중지" in it }).hasSize(1)
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `refuses to trade while an order the dip sleeve did not place is open on one of its symbols`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                // A limit order on AAPL, placed by hand and not yet filled.
+                store.recordOrder(
+                    order("by-hand", status = "PENDING", filled = "0", symbol = "AAPL", orderedAt = Instant.now()),
+                    "PENDING",
+                    OrderSource.STREAM,
+                    Instant.now(),
+                )
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    val failure =
+                        try {
+                            app.sleeves.propose(force = true)
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (expected: IllegalStateException) {
+                            expected
+                        }
+                    // Untagged, the order reads as the momentum sleeve's, whose symbols D shares: refused either way.
+                    assertThat(failure).hasMessageContaining("open orders")
+                }
+
+                assertThat(orderPosts).isEmpty()
                 withContext(engine.coroutineContext) { app.stop() }
             }
         }

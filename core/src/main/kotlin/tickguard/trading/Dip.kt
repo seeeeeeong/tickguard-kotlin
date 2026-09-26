@@ -107,8 +107,11 @@ fun proposeDip(
         bars.filterKeys { it in sleeve.universe }.filterValues { it.isNotEmpty() }.mapValues { (_, list) ->
             list.sortedBy { it.day }
         }
-    val park = series[rules.parking] ?: return null
+    if (series.isEmpty()) return null
     val asOf = series.values.maxOf { it.last().day }
+    // A series that did not update with the rest ends on an older close: it is valued, never traded on.
+    val current = series.filterValues { it.last().day == asOf }
+    val park = current[rules.parking] ?: return null
     val prices = series.mapValues { (_, list) -> list.last().close }
     val value =
         position.holdings.entries.fold(position.cash) { total, (code, quantity) ->
@@ -121,7 +124,7 @@ fun proposeDip(
 
     val held = open.filterKeys { it != rules.parking && (position.holdings[it]?.signum() ?: 0) > 0 }
     for ((code, lot) in held) {
-        val price = prices[code] ?: continue
+        val price = current[code]?.last()?.close ?: continue
         val quantity = position.holdings.getValue(code)
         when {
             price >= lot.average * (Decimal.ONE + rules.takeProfit) ||
@@ -137,7 +140,7 @@ fun proposeDip(
     }
     if (buying) {
         val free = rules.slots - held.size
-        series
+        current
             .filterKeys { it != rules.parking && it !in held }
             .mapNotNull { (code, list) -> signal(list, rules)?.let { code to it } }
             .sortedBy { it.second }

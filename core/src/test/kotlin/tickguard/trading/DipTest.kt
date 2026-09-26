@@ -135,6 +135,22 @@ class DipTest {
     }
 
     @Test
+    fun `never trades on a symbol whose bars stopped a day short of the rest`() {
+        val lot = Lot(d("1"), d("100"), d("100"), 1)
+        // AAA's last bar is a day behind SPY's: its dip and its loss are about another day.
+        val proposal =
+            propose(
+                position("0", "AAA" to "1"),
+                mapOf("AAA" to lot),
+                "AAA" to flat(70.0).dropLast(1),
+                "BBB" to dip().dropLast(1),
+                "SPY" to flat(500.0),
+            )
+
+        assertThat(proposal.trades).isEmpty()
+    }
+
+    @Test
     fun `only sells past the loss limit`() {
         val lot = Lot(d("1"), d("100"), d("100"), 1)
         val proposal =

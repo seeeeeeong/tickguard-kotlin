@@ -309,7 +309,7 @@ class Tickguard(
             clock,
             ::report,
             config.trading,
-            Executor(placer, store),
+            Executor(placer, store, PlacementFiles(config.placements)),
             calendar,
             engine,
             refresh = { check(tasks.refreshBars().unreadable.isEmpty()) { "bars came back unreadable" } },

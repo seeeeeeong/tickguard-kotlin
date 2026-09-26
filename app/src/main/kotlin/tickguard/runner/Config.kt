@@ -114,6 +114,11 @@ data class Config(
     val tickRetention: Duration,
     val store: StoreConfig,
     val metricsPort: Int,
+    /**
+     * Where orders about to be sent are journalled: beside the database by
+     * default, on the volume that outlives the container.
+     */
+    val placements: String = "placements",
 ) {
     override fun toString() = "Config(accountSeq=$accountSeq, extraSymbols=$extraSymbols, rules=$rules, llm=$llm, …)"
 }
@@ -180,6 +185,13 @@ fun loadConfig(env: (String) -> String?): Config {
         tickRetention = read.integer("TICKGUARD_TICK_RETENTION_DAYS", DEFAULT_RETENTION_DAYS, minimum = 1).days,
         store = storeConfig(read, env),
         metricsPort = read.integer("TICKGUARD_METRICS_PORT", DEFAULT_METRICS_PORT),
+        placements =
+            env("TICKGUARD_PLACEMENTS")
+                ?: java.nio.file.Path
+                    .of(env("TICKGUARD_DB") ?: "tickguard.db")
+                    .toAbsolutePath()
+                    .resolveSibling("placements")
+                    .toString(),
     )
 }
 

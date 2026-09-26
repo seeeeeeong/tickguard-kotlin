@@ -222,6 +222,8 @@ class TickguardTest {
                 "TOSS_CLIENT_ID" to "id",
                 "TOSS_CLIENT_SECRET" to "secret",
                 "TOSS_ACCOUNT_SEQ" to "1",
+                // Each app its own journal: an order left in one must not halt the next test.
+                "TICKGUARD_PLACEMENTS" to Files.createTempDirectory("placements-").toString(),
                 "TICKGUARD_DRAWDOWN_FOR_MS" to "1",
                 "TICKGUARD_GROUP_WAIT_MS" to "1",
             ) + extra

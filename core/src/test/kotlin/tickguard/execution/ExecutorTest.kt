@@ -88,6 +88,43 @@ class ExecutorTest {
         }
 
     @Test
+    fun `journals each order around its request, keeps the unaccounted one, and starts halted on it`() =
+        runTest {
+            val journal = MemoryJournal()
+            val first =
+                Executor({
+                    if (it.symbol == "QQQ") PlaceOutcome.Unknown("timeout") else PlaceOutcome.Placed("o-${it.symbol}")
+                }, tags, journal)
+
+            first.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList()))
+
+            assertThat(journal.pending()).containsExactly("tg-20261102-A-B-QQQ")
+            val restarted = Executor({ PlaceOutcome.Placed("never") }, tags, journal)
+            assertThat(restarted.halted).contains("tg-20261102-A-B-QQQ")
+            assertThat(restarted.run(OrderPlan(listOf(buy("GLD")), emptyList(), emptyList())).placed).isEmpty()
+        }
+
+    @Test
+    fun `sends nothing when the journal cannot be written`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val unwritable =
+                object : PlacementJournal by NoJournal {
+                    override fun begin(request: OrderRequest): Unit = error("disk full")
+                }
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("x")
+                }, tags, unwritable)
+
+            executor.run(OrderPlan(listOf(buy("SPY")), emptyList(), emptyList()))
+
+            assertThat(sent).isEmpty()
+            assertThat(executor.halted).contains("disk full")
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()
@@ -113,4 +150,19 @@ private class TaggingOrders : tickguard.orders.OrderStore by ScriptedOrders(Reco
     ) {
         tagged += orderId to sleeve
     }
+}
+
+/** The journal in memory, shared between two executors as a restart would share the directory. */
+private class MemoryJournal : PlacementJournal {
+    private val open = LinkedHashSet<String>()
+
+    override fun begin(request: OrderRequest) {
+        open += request.clientOrderId
+    }
+
+    override fun done(request: OrderRequest) {
+        open -= request.clientOrderId
+    }
+
+    override fun pending(): List<String> = open.toList()
 }

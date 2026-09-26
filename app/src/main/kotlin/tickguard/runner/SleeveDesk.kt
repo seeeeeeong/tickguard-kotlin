@@ -317,7 +317,19 @@ internal class SleeveDesk(
             report(Signal(EXECUTION_ID, "-", "자동 주문 중지", reason, clock.instant()))
             log.error("execution halted: {}", reason)
         }
-        proposals = made
+        val waiting =
+            if (force) {
+                emptyList()
+            } else {
+                waiting(
+                    proposals,
+                    proposedAt,
+                    executedFor,
+                    clock.instant(),
+                    sleeves.map { it.id },
+                )
+            }
+        proposals = waiting + made
         proposedAt = clock.instant()
         val fx = fetchUsdKrw(rest)
         this.fx = fx
@@ -380,7 +392,7 @@ internal class SleeveDesk(
         const val ID_SHOWN = 6
 
         /** A proposal older than this is not placed: the next session's prices are another month's question. */
-        val STALE_AFTER: Duration = Duration.ofHours(30)
+        val STALE_AFTER: Duration = PROPOSAL_LIFETIME
 
         /**
          * The hard limits, in code so configuration cannot raise them: all buys
@@ -390,6 +402,26 @@ internal class SleeveDesk(
          */
         val LIMITS = ExecutionLimits(maxBuys = TestSleeves.DIP_CAPITAL, maxOrdersPerRun = 20)
     }
+}
+
+/** A proposal older than this is not placed: the next session's prices are another month's question. */
+internal val PROPOSAL_LIFETIME: Duration = Duration.ofHours(30)
+
+/**
+ * The earlier proposals still waiting for a session, for the sleeves a new
+ * proposal does not cover: a month's rebalance whose first weekday was a US
+ * holiday must survive the next day's dip proposal. None once placed, or
+ * once too old to place.
+ */
+internal fun waiting(
+    proposals: List<SleeveProposal>,
+    madeAt: Instant?,
+    executedFor: Instant?,
+    now: Instant,
+    covered: List<String>,
+): List<SleeveProposal> {
+    if (madeAt == null || executedFor == madeAt || Duration.between(madeAt, now) > PROPOSAL_LIFETIME) return emptyList()
+    return proposals.filter { it.sleeve.id !in covered }
 }
 
 /** A run of the plan, placed or listed, for the control page. */

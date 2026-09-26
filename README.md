@@ -146,6 +146,13 @@ Three positions at most, never GOOGL. It proposes at 09:00 KST from the last clo
 refreshed first; a failed refresh retries in 15 minutes rather than pricing on an old close) and
 places in that evening's order window.
 
+Every order is journalled before it is sent, as a file named by its client order id under
+`data/placements/`, and crossed out once refused or accepted and tagged with its sleeve. Toss's
+order records carry no client order id, so a file left there (a crash, a failed tag write, an
+unknown outcome) is the only trace of an order its sleeve does not know about, and the service
+starts halted while one is. To recover: find the order in the Toss app, record its sleeve
+(`insert into tickguard.sleeve_orders …`) if it was placed, delete the file, restart.
+
 ### The control page
 
 `http://<tailnet address>:9464/control` is laid out like a brokerage's order screen: the

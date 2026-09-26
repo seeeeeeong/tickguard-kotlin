@@ -278,6 +278,21 @@ internal class SleeveDesk(
             if (!it) log.warn("rebalance: {} skipped, an order of its is still open", sleeve.id)
         }
 
+    /**
+     * The symbols of [sleeve] with an order open that the sleeve did not
+     * place, as the order stream recorded every order in the account: one
+     * placed by hand would fill beside the sleeve's shares and be taken for
+     * its own.
+     */
+    private suspend fun foreignOrders(sleeve: Sleeve): List<String> {
+        val tags = store.orderTags()
+        return store
+            .openOrders()
+            .filter { it.symbol in sleeve.universe && tags[it.orderId] != sleeve.id }
+            .map { it.symbol }
+            .distinct()
+    }
+
     @Suppress("TooGenericExceptionCaught") // Any failure falls back to the last rate.
     private suspend fun rateOrLast(): Decimal =
         try {
@@ -371,10 +386,14 @@ internal class SleeveDesk(
                         TestSleeves.PERSONAL,
                         TestSleeves.START,
                     )
+                val open =
+                    TestSleeves.ALL
+                        .filter { sleeve -> plan.live.any { it.sleeve == sleeve.id } && sleeve.dip != null }
+                        .flatMap { foreignOrders(it) }
                 untracked(owned)?.also {
                     executor.halt(it)
                     announced = it
-                }
+                } ?: open.takeIf { it.isNotEmpty() }?.let { "D 종목에 직접 넣은 미체결 주문이 있어 오늘 주문을 건너뜀: ${it.joinToString()}" }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -495,8 +514,9 @@ internal class SleeveDesk(
             }
         val refreshed = refresh(symbols, from)
         val unreadable = refreshed.unreadable.map { it.substringBefore(" ") }.toSet()
-        val broken = symbols.filter { it in unreadable }
-        check(broken.isEmpty()) { "bars unreadable for ${broken.joinToString()}" }
+        // A monthly sleeve needs every symbol; a dip sleeve only its parking and holdings, below.
+        val broken = sleeves.filter { it.dip == null }.flatMap { it.universe }.filter { it in unreadable }
+        check(broken.isEmpty()) { "bars unreadable for ${broken.distinct().joinToString()}" }
         // Up to the last session that has closed: after midnight in Seoul the store also holds
         // the open session's partial bar, which no proposal may price on.
         val session = closedSession()
@@ -525,10 +545,15 @@ internal class SleeveDesk(
                     complete(sleeve, rules, bars)
                     // Only a close this fetch returned is known to be final: a row the store kept may be a
                     // bar stored while its session was still trading.
+                    // A symbol with an unreadable row is left out too: its history may be short a day.
                     val stale =
                         sleeve.universe.filter {
-                            session == null || session !in refreshed.fetched[it].orEmpty()
+                            it in unreadable || session == null || session !in refreshed.fetched[it].orEmpty()
                         }
+                    val foreign = foreignOrders(sleeve)
+                    check(
+                        foreign.isEmpty(),
+                    ) { "${sleeve.id}: orders of its symbols it did not place are open: ${foreign.joinToString()}" }
                     val needed = stale.filter { it == rules.parking || (position.holdings[it]?.signum() ?: 0) > 0 }
                     check(needed.isEmpty()) {
                         "${sleeve.id}: ${needed.joinToString()} not refreshed through the last US session, $session"

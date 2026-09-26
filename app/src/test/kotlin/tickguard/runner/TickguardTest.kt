@@ -744,6 +744,52 @@ class TickguardTest {
         }
 
     @Test
+    fun `refuses to trade while an order the dip sleeve did not place is open on one of its symbols`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                // A limit order on AAPL, placed by hand and not yet filled.
+                store.recordOrder(
+                    order("by-hand", status = "PENDING", filled = "0", symbol = "AAPL", orderedAt = Instant.now()),
+                    "PENDING",
+                    OrderSource.STREAM,
+                    Instant.now(),
+                )
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    val failure =
+                        try {
+                            app.sleeves.propose(force = true)
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (expected: IllegalStateException) {
+                            expected
+                        }
+                    // Untagged, the order reads as the momentum sleeve's, whose symbols D shares: refused either way.
+                    assertThat(failure).hasMessageContaining("open orders")
+                }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
     fun `sends no order at all while the kill switch is off, whatever the sleeves' modes`() =
         runTest {
             withContext(Dispatchers.Default) {

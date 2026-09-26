@@ -116,8 +116,12 @@ fun planOrders(
             }
         }
     }
-    return OrderPlan(live, dryRun, skipped, proposals.associate { it.sleeve.id to it.position.cash })
+    return OrderPlan(live, dryRun, skipped, budgets(proposals))
 }
+
+/** Each sleeve's cash, less the buffer a dip sleeve keeps out of it for fees and a fill above the close. */
+private fun budgets(proposals: List<SleeveProposal>): Map<String, Decimal> =
+    proposals.associate { it.sleeve.id to it.position.cash - (it.sleeve.dip?.buffer ?: Decimal.ZERO) }
 
 /** Why [request] must not go out, or null when it may. The run's totals apply to live orders only. */
 @Suppress("LongParameterList") // One order against every limit it is held to.

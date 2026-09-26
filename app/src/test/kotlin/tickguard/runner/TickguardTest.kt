@@ -507,6 +507,36 @@ class TickguardTest {
         }
 
     @Test
+    fun `halts when an order tagged to the dip sleeve never reached the ledger`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                // Accepted and tagged, then the process died before the fill was recorded.
+                store.tagOrder("lost-order", "D")
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "자동 주문 중지" in it && "장부에 없는 주문" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
     fun `sends no order at all while the kill switch is off, whatever the sleeves' modes`() =
         runTest {
             withContext(Dispatchers.Default) {

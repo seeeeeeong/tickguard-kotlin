@@ -25,6 +25,7 @@ import tickguard.store.Store
 import tickguard.stream.Decimal
 import tickguard.time.SEOUL
 import tickguard.trading.LossAction
+import tickguard.trading.Sleeve
 import tickguard.trading.SleeveMode
 import tickguard.trading.SleeveProposal
 import tickguard.trading.TestSleeves
@@ -217,6 +218,37 @@ internal class SleeveDesk(
         return lines.ifEmpty { listOf("보낼 주문 없음") }.joinToString("\n")
     }
 
+    /**
+     * A dip sleeve with an order still open waits a day: its fill has not
+     * reached the ledger, so its cash would count money already committed.
+     */
+    private fun settled(
+        sleeve: Sleeve,
+        orders: List<Order>,
+    ): Boolean =
+        orders.none { !it.closed }.also {
+            if (!it) log.warn("rebalance: {} skipped, an order of its is still open", sleeve.id)
+        }
+
+    /**
+     * Why a dip sleeve's ledger is missing an order, or null: an order tagged
+     * to it that the ledger never recorded was accepted, but its fill was
+     * lost (a crash before the stream delivered it, and a resync that only
+     * looks at today), so the sleeve would spend its money again.
+     */
+    private fun unrecorded(
+        orders: List<Order>,
+        tags: Map<String, String>,
+        sleeves: List<Sleeve>,
+    ): String? {
+        val dips = sleeves.filter { it.dip != null }.map { it.id }.toSet()
+        val recorded = orders.map { it.orderId }.toSet()
+        val missing = tags.filter { (id, sleeve) -> sleeve in dips && id !in recorded }.keys
+        return missing.takeIf { it.isNotEmpty() }?.let { ids ->
+            "장부에 없는 주문: ${ids.joinToString { it.take(ID_SHOWN) }} — 토스 앱에서 확인 필요"
+        }
+    }
+
     /** A dip proposal priced on a close older than [STALE_BARS] is dropped: its signal is about another week. */
     private fun fresh(
         proposal: SleeveProposal,
@@ -292,7 +324,8 @@ internal class SleeveDesk(
         attemptedAt = clock.instant()
         refresh()
         val orders = store.ordersSince(TestSleeves.START)
-        val owned = attribute(orders, TestSleeves.ALL, store.orderTags(), TestSleeves.PERSONAL, TestSleeves.START)
+        val tags = store.orderTags()
+        val owned = attribute(orders, TestSleeves.ALL, tags, TestSleeves.PERSONAL, TestSleeves.START)
         val made =
             sleeves.mapNotNull { sleeve ->
                 val bars =
@@ -309,9 +342,17 @@ internal class SleeveDesk(
                 if (rules == null) {
                     proposeRebalance(sleeve, position, bars)
                 } else {
-                    proposeDip(sleeve, position, lots(mine), bars, rules)?.takeIf { fresh(it, today) }
+                    proposeDip(sleeve, position, lots(mine), bars, rules)?.takeIf {
+                        fresh(it, today) &&
+                            settled(sleeve, mine)
+                    }
                 }
             }
+        unrecorded(orders, tags, sleeves)?.let { reason ->
+            executor.halt(reason)
+            report(Signal(EXECUTION_ID, "-", "자동 주문 중지", reason, clock.instant()))
+            log.error("execution halted: {}", reason)
+        }
         untracked(owned)?.let { reason ->
             executor.halt(reason)
             report(Signal(EXECUTION_ID, "-", "자동 주문 중지", reason, clock.instant()))

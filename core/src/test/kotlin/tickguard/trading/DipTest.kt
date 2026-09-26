@@ -151,6 +151,21 @@ class DipTest {
     }
 
     @Test
+    fun `buys nothing while a holding has no price for the last close`() {
+        val lot = Lot(d("1"), d("100"), d("100"), 1)
+        val proposal =
+            propose(
+                position("300", "AAA" to "1"),
+                mapOf("AAA" to lot),
+                "AAA" to flat(95.0).dropLast(1),
+                "BBB" to dip(),
+                "SPY" to flat(500.0),
+            )
+
+        assertThat(proposal.trades).isEmpty()
+    }
+
+    @Test
     fun `only sells past the loss limit`() {
         val lot = Lot(d("1"), d("100"), d("100"), 1)
         val proposal =

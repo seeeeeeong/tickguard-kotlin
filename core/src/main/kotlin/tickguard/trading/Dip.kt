@@ -117,7 +117,10 @@ fun proposeDip(
         position.holdings.entries.fold(position.cash) { total, (code, quantity) ->
             total + quantity * (prices[code] ?: Decimal.ZERO)
         }
-    val buying = value >= sleeve.capital * (Decimal.ONE - sleeve.lossLimit)
+    // Every holding must be priced on today's close before anything is bought: an old close can
+    // hide a loss past the limit.
+    val priced = position.holdings.keys.all { it in current }
+    val buying = priced && value >= sleeve.capital * (Decimal.ONE - sleeve.lossLimit)
     val tranche = sleeve.capital / Decimal.of(rules.slots.toLong() * 2)
     val sells = ArrayList<ProposedTrade>()
     val buys = ArrayList<ProposedTrade>()

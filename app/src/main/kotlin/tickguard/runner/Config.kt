@@ -186,7 +186,7 @@ fun loadConfig(env: (String) -> String?): Config {
         store = storeConfig(read, env),
         metricsPort = read.integer("TICKGUARD_METRICS_PORT", DEFAULT_METRICS_PORT),
         placements =
-            env("TICKGUARD_PLACEMENTS")
+            env("TICKGUARD_PLACEMENTS")?.takeIf { it.isNotBlank() }
                 ?: java.nio.file.Path
                     .of(env("TICKGUARD_DB") ?: "tickguard.db")
                     .toAbsolutePath()

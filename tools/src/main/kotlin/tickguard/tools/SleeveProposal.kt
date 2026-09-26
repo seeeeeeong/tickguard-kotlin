@@ -38,9 +38,13 @@ suspend fun main(args: Array<String>) {
             val mine = owned[sleeve.id].orEmpty()
             val position = position(sleeve, mine)
             // The same proposer the service runs for each sleeve.
+            val rules = sleeve.dip
             val proposal =
-                sleeve.dip?.let { proposeDip(sleeve, position, lots(mine), bars, it) }
-                    ?: proposeRebalance(sleeve, position, bars)
+                if (rules == null) {
+                    proposeRebalance(sleeve, position, bars)
+                } else {
+                    proposeDip(sleeve, position, lots(mine), bars, rules)
+                }
             println(proposal?.let { text(it, fx) } ?: "== ${sleeve.name}: 일봉 없음")
         }
     } finally {

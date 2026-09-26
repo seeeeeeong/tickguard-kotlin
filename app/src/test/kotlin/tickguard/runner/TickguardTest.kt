@@ -834,6 +834,35 @@ class TickguardTest {
         }
 
     @Test
+    fun `takes only dip sleeves from the switch file, and stops orders even when the file cannot be cleared`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                val data = Files.createTempDirectory("data-")
+                Files.writeString(data.resolve("daily-live"), "A\n")
+                val env =
+                    mapOf(
+                        "TICKGUARD_TRADING" to "on",
+                        "TICKGUARD_SLEEVE_A" to "DRY_RUN",
+                        "TICKGUARD_PLACEMENTS" to data.resolve("placements").toString(),
+                    )
+                val url = server.url("/").toString().trimEnd('/')
+
+                // A monthly sleeve named in the file is never made live.
+                assertThat(app(url, CopyOnWriteArrayList(), env, store).sleeves.state().daily).isEmpty()
+
+                // A directory where the file should be: it can be neither read nor deleted.
+                Files.delete(data.resolve("daily-live"))
+                Files.createDirectories(data.resolve("daily-live").resolve("stuck"))
+                val stuck = app(url, CopyOnWriteArrayList(), env, store)
+                stuck.sleeves.stop()
+                assertThat(stuck.sleeves.state().stopped).isTrue()
+            }
+        }
+
+    @Test
     fun `refuses the daily switch while no dip sleeve is in dry run`() =
         runTest {
             withContext(Dispatchers.Default) {

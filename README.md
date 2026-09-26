@@ -169,8 +169,10 @@ orders in the window, then offers to buy them.
 | 매일 자동 주문 켜기 → 켜기 | Runs the dip sleeve, configured `DRY_RUN`, live every weekday without a press. Announced in Discord | Until switched off on the page, or by the stop button; kept across restarts in `data/daily-live` |
 | 중지 (top right) → 멈추기 | No order of any kind, and switches daily orders off; orders already sent are not cancelled | Until a restart |
 
-Nothing the page switches survives a restart: `.env` stays the durable setting, so a
-forgotten switch cannot move money next month. Each button sends an `X-Tickguard-Control: 1`
+Only the daily switch survives a restart, kept in `data/daily-live`, shown at the top of the page
+and announced in Discord whenever it changes; LIVE for one window and the stop are forgotten on
+restart (the stop also clears the daily switch). `.env` stays the ceiling: an `OFF` sleeve or
+trading off cannot be switched on from the page. Each button sends an `X-Tickguard-Control: 1`
 header, which a form on another site cannot, so from a shell:
 
 ```bash

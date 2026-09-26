@@ -93,7 +93,11 @@ internal class SleeveDesk(
     @Volatile var fx: Decimal = TestSleeves.FX
         private set
 
-    @Volatile private var arming = Arming(daily = daily.load())
+    // Only dip sleeves are ever switched daily: anything else in the file is ignored, never made live.
+    @Volatile private var arming = Arming(daily = daily.load().filter { it in DIP_IDS }.toSet())
+
+    /** Serialises the switch's file and [arming], so two presses cannot leave them disagreeing. */
+    private val switching = Any()
 
     @Volatile private var executedFor: Instant? = null
 
@@ -166,11 +170,21 @@ internal class SleeveDesk(
     @Volatile private var liveFor: Instant? = null
 
     /** The control page's stop: no order of any kind until the process restarts. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the file did, orders are already stopped.
     fun stop() {
-        // Stop means stop: a daily switch left on would start trading again at the next restart.
-        daily.save(emptySet())
-        arming = Arming(stopped = true)
-        log.warn("control: trading stopped until restart, daily orders switched off")
+        synchronized(switching) {
+            // Orders stop first, in memory, whatever happens to the file after.
+            arming = Arming(stopped = true)
+            try {
+                // Stop means stop: a daily switch left on would start trading again at the next restart.
+                daily.save(emptySet())
+                log.warn("control: trading stopped until restart, daily orders switched off")
+            } catch (failure: Exception) {
+                val message = "긴급 중지는 됐지만 매일 자동 주문 파일을 지우지 못함: ${failure.message} — 재시작 전에 data/daily-live 를 지우세요"
+                scope.launch { report(Signal(EXECUTION_ID, "-", "자동 주문 중지", message, clock.instant())) }
+                log.error("control: trading stopped, but the daily switch file remains: {}", failure.message)
+            }
+        }
     }
 
     /**
@@ -193,8 +207,10 @@ internal class SleeveDesk(
                 else -> null
             }
         if (refusal == null) {
-            daily.save(sleeves)
-            arming = arming.copy(daily = sleeves)
+            synchronized(switching) {
+                daily.save(sleeves)
+                arming = arming.copy(daily = sleeves)
+            }
             val most = limitsFor(trading.modes).maxBuys.format(2)
             // Called from a request thread: the report is the engine's to send.
             val message =
@@ -213,8 +229,10 @@ internal class SleeveDesk(
 
     /** Switches daily orders off: from the next run the dip sleeves only list their orders again. */
     fun stopDaily() {
-        daily.save(emptySet())
-        arming = arming.copy(daily = emptySet())
+        synchronized(switching) {
+            daily.save(emptySet())
+            arming = arming.copy(daily = emptySet())
+        }
         val message = Signal(EXECUTION_ID, "-", "매일 자동 주문 꺼짐", "이제 [구매하기]를 눌러야 주문이 나갑니다.", clock.instant())
         scope.launch { report(message) }
         log.warn("control: daily live orders off")
@@ -693,6 +711,13 @@ internal class SleeveDesk(
 
         /** Days of bars a monthly proposal fetches again: enough to cover a long weekend's gap. */
         const val OVERLAP_DAYS = 10L
+
+        /** The sleeves the daily switch may name: the dip sleeves. */
+        val DIP_IDS: Set<String> =
+            TestSleeves.ALL
+                .filter { it.dip != null }
+                .map { it.id }
+                .toSet()
 
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)

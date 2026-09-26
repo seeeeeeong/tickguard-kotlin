@@ -1,5 +1,8 @@
 package tickguard.runner
 
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
@@ -29,14 +32,20 @@ internal object NoDailySwitch : DailySwitch {
 internal class DailySwitchFile(
     private val path: Path,
 ) : DailySwitch {
+    /** Unreadable reads as off: a switch that cannot be read must not be taken as on. */
     override fun load(): Set<String> =
-        if (path.exists()) {
-            path
-                .readLines()
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .toSet()
-        } else {
+        try {
+            if (path.exists()) {
+                path
+                    .readLines()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toSet()
+            } else {
+                emptySet()
+            }
+        } catch (unreadable: IOException) {
+            log.error("daily switch unreadable, taken as off: {}", unreadable.message)
             emptySet()
         }
 
@@ -49,3 +58,5 @@ internal class DailySwitchFile(
         }
     }
 }
+
+private val log: Logger = LoggerFactory.getLogger(DailySwitchFile::class.java)

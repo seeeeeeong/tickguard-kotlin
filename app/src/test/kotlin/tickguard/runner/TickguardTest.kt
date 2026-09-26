@@ -899,6 +899,32 @@ class TickguardTest {
         }
 
     @Test
+    fun `saves no daily switch once stopped, which a restart would otherwise act on`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                val data = Files.createTempDirectory("data-")
+                val env =
+                    mapOf(
+                        "TICKGUARD_TRADING" to "on",
+                        "TICKGUARD_SLEEVE_D" to "DRY_RUN",
+                        "TICKGUARD_PLACEMENTS" to data.resolve("placements").toString(),
+                    )
+                val app = app(server.url("/").toString().trimEnd('/'), CopyOnWriteArrayList(), env, store)
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+
+                app.sleeves.stop()
+
+                assertThat(app.sleeves.startDaily()).isEqualTo("trading is off")
+                assertThat(DailySwitchFile(data.resolve("placements").resolve("daily-live")).load()).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
     fun `sends no order at all while the kill switch is off, whatever the sleeves' modes`() =
         runTest {
             withContext(Dispatchers.Default) {

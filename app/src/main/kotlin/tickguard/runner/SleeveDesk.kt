@@ -208,15 +208,10 @@ internal class SleeveDesk(
             synchronized(switching) {
                 val reason =
                     when {
-                        sleeves.isNotEmpty() &&
-                            arming.enabled(
-                                trading.enabled,
-                            ) && arming.daily == sleeves -> return@synchronized ALREADY_ON
-
+                        !arming.enabled(trading.enabled) -> "trading is off"
+                        sleeves.isNotEmpty() && arming.daily == sleeves -> return@synchronized ALREADY_ON
                         executor.halted != null -> "halted"
-
                         sleeves.isEmpty() -> "no sleeve in DRY_RUN"
-
                         else -> saveDaily(sleeves)
                     }
                 if (reason == null) {

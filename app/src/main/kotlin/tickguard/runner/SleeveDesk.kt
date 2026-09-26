@@ -30,6 +30,7 @@ import tickguard.time.SEOUL
 import tickguard.trading.Bar
 import tickguard.trading.DipRules
 import tickguard.trading.LossAction
+import tickguard.trading.RefreshedBars
 import tickguard.trading.Sleeve
 import tickguard.trading.SleeveMode
 import tickguard.trading.SleeveProposal
@@ -66,8 +67,11 @@ internal class SleeveDesk(
     private val calendar: Calendar,
     /** The engine: proposals and orders run where the rest of the domain state does. */
     private val scope: CoroutineScope,
-    /** Fetches the latest daily bars; returns the symbols with rows it could not read. */
-    private val refresh: suspend () -> Set<String> = { emptySet() },
+    /** Fetches these symbols' daily bars from a date into the store; what it read is in the result. */
+    private val refresh: suspend (
+        Collection<String>,
+        LocalDate,
+    ) -> RefreshedBars = { _, _ -> RefreshedBars(0, emptyList()) },
     /** The account's shares by symbol, fresh: what the ledger is checked against before a dip sleeve trades. */
     private val account: suspend () -> Map<String, Decimal> = { emptyMap() },
 ) {
@@ -192,16 +196,18 @@ internal class SleeveDesk(
                 limitsFor(trading.modes),
                 LocalDate.ofInstant(made, SEOUL),
             )
-        val result = executor.run(plan)
-        lastRun = LastRun(now, plan, result)
-        report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
-        log.info(
-            "execution: {} placed, {} refused, {} skipped, halted={}",
-            result.placed.size,
-            result.refused.size,
-            plan.skipped.size,
-            result.haltedAt != null,
-        )
+        if (verified(plan)) {
+            val result = executor.run(plan)
+            lastRun = LastRun(now, plan, result)
+            report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
+            log.info(
+                "execution: {} placed, {} refused, {} skipped, halted={}",
+                result.placed.size,
+                result.refused.size,
+                plan.skipped.size,
+                result.haltedAt != null,
+            )
+        }
     }
 
     private fun summary(
@@ -305,6 +311,43 @@ internal class SleeveDesk(
     }
 
     /**
+     * Whether [plan]'s live dip orders may go out: the account is checked
+     * against the ledger again right before them, since hours pass between
+     * the morning's proposal and the evening's orders. A mismatch halts; an
+     * account that cannot be read skips tonight's run.
+     */
+    @Suppress("TooGenericExceptionCaught") // Any failure to read the account skips the run.
+    private suspend fun verified(plan: OrderPlan): Boolean {
+        val dips =
+            TestSleeves.ALL
+                .filter { it.dip != null }
+                .map { it.id }
+                .toSet()
+        if (plan.live.none { it.sleeve in dips }) return true
+        val problem =
+            try {
+                val owned =
+                    attribute(
+                        store.ordersSince(TestSleeves.START),
+                        TestSleeves.ALL,
+                        store.orderTags(),
+                        TestSleeves.PERSONAL,
+                        TestSleeves.START,
+                    )
+                untracked(owned)?.also { executor.halt(it) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                "계좌 수량을 확인하지 못해 오늘 주문을 건너뜀: ${failure.message}"
+            }
+        problem?.let {
+            report(Signal(EXECUTION_ID, "-", "자동 주문 중지", it, clock.instant()))
+            log.error("execution skipped: {}", it)
+        }
+        return problem == null
+    }
+
+    /**
      * Why the account contradicts the ledger, or null if it does not; see
      * [mismatched]. Checked for the dip sleeves that are on.
      */
@@ -396,8 +439,20 @@ internal class SleeveDesk(
         sleeves: List<Sleeve>,
         force: Boolean,
     ) {
-        val unreadable = refresh()
-        val broken = sleeves.flatMap { it.universe }.distinct().filter { it in unreadable }
+        val symbols = sleeves.flatMap { it.universe }.distinct()
+        // A dip sleeve's signal averages 200 closes: all of them are fetched again, so a split the API
+        // has adjusted for never leaves older bars in the store in the old units.
+        val from =
+            if (sleeves.any { it.dip != null }) {
+                today.minusYears(
+                    HISTORY_YEARS,
+                )
+            } else {
+                today.minusDays(OVERLAP_DAYS)
+            }
+        val refreshed = refresh(symbols, from)
+        val unreadable = refreshed.unreadable.map { it.substringBefore(" ") }.toSet()
+        val broken = symbols.filter { it in unreadable }
         check(broken.isEmpty()) { "bars unreadable for ${broken.joinToString()}" }
         // Up to the last session that has closed: after midnight in Seoul the store also holds
         // the open session's partial bar, which no proposal may price on.
@@ -424,13 +479,18 @@ internal class SleeveDesk(
                 } else {
                     complete(sleeve, rules, bars)
                     val left = leftovers(TestSleeves.ALL, owned)
-                    check(
-                        left.isEmpty(),
-                    ) { "${sleeve.id}: ${left.joinToString()} still hold shares; clear them before it trades" }
+                    check(left.isEmpty()) { "${sleeve.id}: ${left.joinToString()} still hold shares or open orders" }
+                    // Only a close this fetch returned is known to be final: a row the store kept may be a
+                    // bar stored while its session was still trading.
+                    val stale = sleeve.universe.filter { refreshed.latest[it] != session }
+                    val needed = stale.filter { it == rules.parking || (position.holdings[it]?.signum() ?: 0) > 0 }
+                    check(needed.isEmpty()) {
+                        "${sleeve.id}: ${needed.joinToString()} not refreshed through the last US session, $session"
+                    }
                     // No proposal means the parking symbol has no current close: fail and retry rather than
                     // lose the day's exits.
                     val proposal =
-                        checkNotNull(proposeDip(sleeve, position, lots(mine), bars, rules)) {
+                        checkNotNull(proposeDip(sleeve, position, lots(mine), bars - stale.toSet(), rules)) {
                             "${sleeve.id}: no current bar for ${rules.parking}"
                         }
                     current(proposal, session)
@@ -501,6 +561,9 @@ internal class SleeveDesk(
 
         /** Enough daily history for the longest signal, a 200-day average, with room. */
         const val HISTORY_YEARS = 2L
+
+        /** Days of bars a monthly proposal fetches again: enough to cover a long weekend's gap. */
+        const val OVERLAP_DAYS = 10L
 
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
@@ -583,18 +646,20 @@ private const val TEST_WON = 300_000L
 private const val MAX_ORDERS = 20
 
 /**
- * The sleeves other than the dip sleeves that still hold shares by their
- * ledgers. The dip sleeve replaced them in the same account and starts from
- * its whole capital in cash, so their shares must be sold or moved first, or
- * the same dollars would be counted twice.
+ * The sleeves other than the dip sleeves that still hold shares, or have an
+ * order open that could fill into some, by their ledgers. The dip sleeve
+ * replaced them in the same account and starts from its whole capital in
+ * cash, so their shares must be sold or moved first, or the same dollars
+ * would be counted twice.
  */
 internal fun leftovers(
     sleeves: List<Sleeve>,
     owned: Map<String, List<Order>>,
 ): List<String> =
     sleeves
-        .filter {
-            it.dip == null && position(it, owned[it.id].orEmpty()).holdings.isNotEmpty()
+        .filter { sleeve ->
+            val orders = owned[sleeve.id].orEmpty()
+            sleeve.dip == null && (position(sleeve, orders).holdings.isNotEmpty() || orders.any { !it.closed })
         }.map { it.id }
 
 /** A run of the plan, placed or listed, for the control page. */

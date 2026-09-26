@@ -312,13 +312,7 @@ class Tickguard(
             Executor(placer, store, PlacementFiles(config.placements)) { awaitFilled(store, clock, it) },
             calendar,
             engine,
-            refresh = {
-                tasks
-                    .refreshBars()
-                    .unreadable
-                    .map { it.substringBefore(" ") }
-                    .toSet()
-            },
+            refresh = { codes, from -> tasks.refreshBars(codes, from) },
             account = {
                 // A failed or unconfirmed refresh returns the last snapshot; only a fresh one is the account now.
                 val asked = clock.instant()
@@ -454,9 +448,10 @@ class Tickguard(
          * The test sleeves' recent daily bars, fetched with the service's own
          * token: a separate tool would issue a second token and revoke this one.
          */
-        suspend fun refreshBars(): RefreshedBars {
-            val codes = TestSleeves.ALL.flatMap { it.universe }.distinct()
-            val from = LocalDate.now(clock.withZone(SEOUL)).minusDays(BAR_OVERLAP_DAYS)
+        suspend fun refreshBars(
+            codes: Collection<String> = TestSleeves.ALL.flatMap { it.universe }.distinct(),
+            from: LocalDate = LocalDate.now(clock.withZone(SEOUL)).minusDays(BAR_OVERLAP_DAYS),
+        ): RefreshedBars {
             val refreshed = refreshBars(rest, store, codes, from)
             if (refreshed.unreadable.isNotEmpty()) {
                 log.error(

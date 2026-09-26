@@ -121,6 +121,21 @@ class TickguardTest {
     /** The date of the last closed US session the fake calendar reports. */
     @Volatile private var previousSession = LocalDate.now(SEOUL).minusDays(1)
 
+    /** The date the fake's candles end on; the last closed session unless a test says otherwise. */
+    @Volatile private var candleDay: LocalDate? = null
+
+    /** Symbols the fake has no candles for. */
+    @Volatile private var noCandles: Set<String> = emptySet()
+
+    /** One bar for [code], dated the fake calendar's last closed session, flat at 100 like the seeded ones. */
+    private fun candles(code: String?): String {
+        val bar =
+            """{"timestamp":"${candleDay ?: previousSession}T16:00:00-04:00","openPrice":"100",""" +
+                """"highPrice":"100","lowPrice":"100","closePrice":"100","volume":"1"}"""
+        val rows = if (code == null || code in noCandles) "" else bar
+        return """{"result":{"candles":[$rows],"nextBefore":null}}"""
+    }
+
     /** The account's holdings as the fake answers them. */
     @Volatile private var heldJson =
         """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
@@ -150,9 +165,8 @@ class TickguardTest {
                     json("""{"result":{"orders":[],"nextCursor":null,"hasNext":false}}""")
                 }
 
-                // No new bars: the tests seed the store with the ones they need.
                 path == "/api/v1/candles" -> {
-                    json("""{"result":{"candles":[],"nextBefore":null}}""")
+                    json(candles(request.url.queryParameter("symbol")))
                 }
 
                 path == "/api/v1/exchange-rate" -> {
@@ -574,6 +588,7 @@ class TickguardTest {
             withContext(Dispatchers.Default) {
                 // The bars end yesterday, but the calendar says today's session has already closed.
                 previousSession = LocalDate.now(SEOUL)
+                candleDay = LocalDate.now(SEOUL).minusDays(1)
                 server.dispatcher = FakeToss()
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
@@ -599,7 +614,7 @@ class TickguardTest {
                         } catch (expected: IllegalStateException) {
                             expected
                         }
-                    assertThat(failure).hasMessageContaining("the last US session was")
+                    assertThat(failure).hasMessageContaining("the last US session")
                     app.sleeves.execute()
                 }
 
@@ -617,6 +632,7 @@ class TickguardTest {
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
                 // The candidates are current, SPY has no bars at all.
+                noCandles = setOf("SPY")
                 seedDipBars(store)
                 val app =
                     app(
@@ -638,7 +654,7 @@ class TickguardTest {
                         } catch (expected: IllegalStateException) {
                             expected
                         }
-                    assertThat(failure).hasMessageContaining("no current bar for SPY")
+                    assertThat(failure).hasMessageContaining("SPY not refreshed through the last US session")
                 }
 
                 assertThat(orderPosts).isEmpty()

@@ -54,6 +54,20 @@ fun lastSession(
         ?.substringBefore(" ")
         ?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
 
+/**
+ * The date of the earliest regular session the calendar lists, whether or
+ * not it has closed. After midnight in Seoul the calendar lists only the US
+ * session still running and the next one, so the last closed session is
+ * the last trading day before this.
+ */
+fun firstSession(hours: MarketHours?): java.time.LocalDate? =
+    hours
+        ?.sessions
+        .orEmpty()
+        .filter { it.name.endsWith("regularMarket") }
+        .mapNotNull { runCatching { java.time.LocalDate.parse(it.name.substringBefore(" ")) }.getOrNull() }
+        .minOrNull()
+
 /** The calendar's order window, opening to closing, or null without a regular session. */
 fun orderWindow(hours: MarketHours?): ClosedRange<Instant>? =
     hours

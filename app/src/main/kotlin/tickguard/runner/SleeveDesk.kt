@@ -12,6 +12,7 @@ import tickguard.execution.ExecutionResult
 import tickguard.execution.Executor
 import tickguard.execution.OrderPlan
 import tickguard.execution.OrderRequest
+import tickguard.execution.firstSession
 import tickguard.execution.inOrderWindow
 import tickguard.execution.lastSession
 import tickguard.execution.orderWindow
@@ -253,6 +254,22 @@ internal class SleeveDesk(
     }
 
     /**
+     * The last US session that has closed. The calendar names it until
+     * midnight in Seoul; after that it lists only the session still running
+     * and the next, and the last closed session is the last stored close
+     * before the running one's date.
+     */
+    private suspend fun closedSession(): LocalDate? {
+        val hours = calendar.load(Market.US)
+        return lastSession(hours, clock.instant())
+            ?: firstSession(hours)?.let { running ->
+                store
+                    .bars(TestSleeves.PARKING, running.minusDays(LOOKBACK_DAYS), running.minusDays(1))
+                    .maxOfOrNull { it.day }
+            }
+    }
+
+    /**
      * Throws unless [proposal] is priced on exactly the last US session that
      * has closed, as the calendar has it: bars a session behind would trade on
      * an old signal, so the proposal fails and is tried again in
@@ -380,7 +397,7 @@ internal class SleeveDesk(
         check(broken.isEmpty()) { "bars unreadable for ${broken.joinToString()}" }
         // Up to the last session that has closed: after midnight in Seoul the store also holds
         // the open session's partial bar, which no proposal may price on.
-        val session = lastSession(calendar.load(Market.US), clock.instant())
+        val session = closedSession()
         val through = session ?: today.minusDays(1)
         val orders = store.ordersSince(TestSleeves.START)
         val tags = store.orderTags()
@@ -402,9 +419,14 @@ internal class SleeveDesk(
                     proposeRebalance(sleeve, position, bars)
                 } else {
                     complete(sleeve, rules, bars)
-                    proposeDip(sleeve, position, lots(mine), bars, rules)
-                        ?.also { current(it, session) }
-                        ?.takeIf { settled(sleeve, mine) }
+                    // No proposal means the parking symbol has no current close: fail and retry rather than
+                    // lose the day's exits.
+                    val proposal =
+                        checkNotNull(proposeDip(sleeve, position, lots(mine), bars, rules)) {
+                            "${sleeve.id}: no current bar for ${rules.parking}"
+                        }
+                    current(proposal, session)
+                    proposal.takeIf { settled(sleeve, mine) }
                 }
             }
         unrecorded(orders, tags, sleeves)?.let { reason ->
@@ -477,6 +499,9 @@ internal class SleeveDesk(
 
         /** Shares the account and the ledger may differ by: fills are quoted to six places. */
         val SHARE_TOLERANCE: Decimal = Decimal.parse("0.0001", "tolerance")
+
+        /** Far enough back to cross a long weekend when looking for the last close before a session. */
+        const val LOOKBACK_DAYS = 10L
 
         /** How long a failed proposal waits before the next try. */
         val RETRY_AFTER: Duration = Duration.ofMinutes(15)

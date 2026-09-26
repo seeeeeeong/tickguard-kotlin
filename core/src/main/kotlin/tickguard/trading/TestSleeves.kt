@@ -48,6 +48,9 @@ object TestSleeves {
             "SPCX",
         )
 
+    /** Where the dip sleeve's idle money waits, and the series its closes are checked by. */
+    const val PARKING = "SPY"
+
     /** The dip sleeve's capital: the account's dollars on 2026-09-25, as the user set it. Code, not configuration. */
     val DIP_CAPITAL: Decimal = Decimal.parse("733.98", "dip capital")
 
@@ -100,12 +103,12 @@ object TestSleeves {
                 "D",
                 "D 반등형",
                 DIP_CAPITAL,
-                DIP_SYMBOLS + "SPY",
+                DIP_SYMBOLS + PARKING,
                 ::BuyAndHold,
                 BAND,
                 Decimal.parse("0.40", "loss"),
                 LossAction.STOP_BUYING,
-                DipRules(),
+                DipRules(parking = PARKING),
             ),
         )
 }

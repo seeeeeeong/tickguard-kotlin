@@ -610,6 +610,43 @@ class TickguardTest {
         }
 
     @Test
+    fun `fails the dip proposal, to try again, while its parking symbol has no current bar`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                // The candidates are current, SPY has no bars at all.
+                seedDipBars(store)
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    val failure =
+                        try {
+                            app.sleeves.propose(force = true)
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (expected: IllegalStateException) {
+                            expected
+                        }
+                    assertThat(failure).hasMessageContaining("no current bar for SPY")
+                }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
     fun `sends no order at all while the kill switch is off, whatever the sleeves' modes`() =
         runTest {
             withContext(Dispatchers.Default) {

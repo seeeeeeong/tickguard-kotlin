@@ -64,4 +64,10 @@ class OrderWindowTest {
         assertThat(lastSession(hours, Instant.parse("2026-11-02T20:59:59Z"))).isNull()
         assertThat(lastSession(null, Instant.parse("2026-11-02T21:00:00Z"))).isNull()
     }
+
+    @Test
+    fun `names the earliest regular session listed, running or not`() {
+        assertThat(firstSession(hours)).isEqualTo(java.time.LocalDate.parse("2026-11-02"))
+        assertThat(firstSession(null)).isNull()
+    }
 }

@@ -25,12 +25,15 @@ import okhttp3.WebSocketListener
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import tickguard.orders.OrderSource
 import tickguard.store.sqlite.SqliteStore
 import tickguard.stream.Decimal
+import tickguard.testing.order
 import tickguard.time.SEOUL
 import tickguard.trading.Bar
 import tickguard.trading.TestSleeves
 import java.nio.file.Files
+import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -475,6 +478,15 @@ class TickguardTest {
 
                 app.sleeves.stop()
                 assertThat(app.sleeves.goLive()).isEqualTo("trading is off")
+                // The fills the order stream would have delivered: the ledger knows every tagged order.
+                (1..5).forEach { n ->
+                    store.recordOrder(
+                        order("placed-$n", status = "FILLED", symbol = "SPY", price = null, orderedAt = Instant.now()),
+                        "FILL",
+                        OrderSource.STREAM,
+                        Instant.now(),
+                    )
+                }
                 withContext(engine.coroutineContext) {
                     app.sleeves.propose(force = true)
                     app.sleeves.execute()
@@ -694,6 +706,39 @@ class TickguardTest {
                 withContext(engine.coroutineContext) { app.sleeves.execute() }
 
                 assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `reports at once a halt it starts with, from an order a previous process never accounted for`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                val journal = Files.createTempDirectory("placements-")
+                Files.writeString(journal.resolve("tg-20260928-D-B-SPY"), "D BUY SPY\n")
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf(
+                            "TICKGUARD_TRADING" to "on",
+                            "TICKGUARD_SLEEVE_D" to "LIVE",
+                            "TICKGUARD_PLACEMENTS" to journal.toString(),
+                        ),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+
+                eventually { alerts.any { "자동 주문 중지" in it && "tg-20260928-D-B-SPY" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
+                assertThat(alerts.filter { "자동 주문 중지" in it }).hasSize(1)
                 withContext(engine.coroutineContext) { app.stop() }
             }
         }

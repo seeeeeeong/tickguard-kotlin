@@ -96,6 +96,19 @@ class CalendarTest {
         }
 
     @Test
+    fun `asks for a given exchange date without replacing the cached hours`() =
+        runTest {
+            val rest = StubRest(usWithPrevious)
+            val calendar = Calendar(rest)
+
+            val hours = calendar.on(Market.US, java.time.LocalDate.parse("2026-09-23"))
+
+            assertThat(rest.asked.single().query).containsEntry("date", "2026-09-23")
+            assertThat(hours!!.sessions.map { it.name }).contains("2026-09-22 regularMarket")
+            assertThat(calendar.hours(Market.US)).isNull()
+        }
+
+    @Test
     fun `says closed while hours are unknown, rather than guessing`() {
         assertThat(Calendar(StubRest(kr)).isOpen(Market.KR, Instant.parse("2026-09-23T01:00:00Z"))).isFalse()
     }

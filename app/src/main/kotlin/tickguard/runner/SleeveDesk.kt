@@ -25,6 +25,7 @@ import tickguard.sla.Calendar
 import tickguard.sla.Market
 import tickguard.store.Store
 import tickguard.stream.Decimal
+import tickguard.time.NEW_YORK
 import tickguard.time.SEOUL
 import tickguard.trading.Bar
 import tickguard.trading.DipRules
@@ -143,6 +144,22 @@ internal class SleeveDesk(
         return refusal
     }
 
+    /**
+     * Reports a halt no run has reported: one the executor started with,
+     * from an order a previous process never accounted for. It blocks exits
+     * too, so it must not wait for someone to open the status page.
+     */
+    private fun announce() {
+        val halted = executor.halted
+        if (halted != null && halted != announced) {
+            announced = halted
+            report(Signal(EXECUTION_ID, "-", "자동 주문 중지", halted, clock.instant()))
+            log.error("execution halted: {}", halted)
+        }
+    }
+
+    @Volatile private var announced: String? = null
+
     /** The proposal whose orders went out live: it is never placed a second time. */
     @Volatile private var liveFor: Instant? = null
 
@@ -194,6 +211,7 @@ internal class SleeveDesk(
      * Checked every minute; does nothing unless the kill switch is on.
      */
     suspend fun execute() {
+        announce()
         catchUp()
         val made = proposedAt ?: return
         val now = clock.instant()
@@ -210,6 +228,8 @@ internal class SleeveDesk(
         if (verified(plan)) {
             if (plan.live.isNotEmpty()) liveFor = made
             val result = executor.run(plan)
+            // The run's report says why it halted, if it did.
+            announced = executor.halted
             lastRun = LastRun(now, plan, result)
             report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
             log.info(
@@ -258,32 +278,45 @@ internal class SleeveDesk(
             if (!it) log.warn("rebalance: {} skipped, an order of its is still open", sleeve.id)
         }
 
+    @Suppress("TooGenericExceptionCaught") // Any failure falls back to the last rate.
+    private suspend fun rateOrLast(): Decimal =
+        try {
+            fetchUsdKrw(rest)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            log.warn("rebalance: exchange rate unavailable, using {}: {}", fx, failure.message)
+            fx
+        }
+
     /**
-     * Why a dip sleeve's ledger is missing an order, or null: an order tagged
-     * to it that the ledger never recorded was accepted, but its fill was
-     * lost (a crash before the stream delivered it, and a resync that only
-     * looks at today), so the sleeve would spend its money again.
+     * Why the ledger is missing an order, or null: an order tagged to any
+     * sleeve, whichever is on now, that the ledger never recorded was
+     * accepted but its fill was lost (a crash before the stream delivered
+     * it, and a resync that only looks at today), so money would be spent
+     * again by whichever sleeve runs next.
      */
     private fun unrecorded(
         orders: List<Order>,
         tags: Map<String, String>,
-        sleeves: List<Sleeve>,
     ): String? {
-        val dips = sleeves.filter { it.dip != null }.map { it.id }.toSet()
         val recorded = orders.map { it.orderId }.toSet()
-        val missing = tags.filter { (id, sleeve) -> sleeve in dips && id !in recorded }.keys
+        val missing = tags.filter { (id, _) -> id !in recorded }.keys
         return missing.takeIf { it.isNotEmpty() }?.let { ids ->
             "장부에 없는 주문: ${ids.joinToString { it.take(ID_SHOWN) }} — 토스 앱에서 확인 필요"
         }
     }
 
     /**
-     * The last US session that has closed, as the calendar names it. After
-     * midnight in Seoul it lists only the session still running and the next,
-     * so there is none, and a dip proposal made then fails rather than guess:
-     * LIVE places the morning's proposal instead of proposing again.
+     * The last US session that has closed, from the calendar asked by New
+     * York's date: that day and the business day before, of which the latest
+     * closed one is the answer at any hour in Seoul. None if the calendar
+     * cannot be read, and then a proposal fails rather than guess.
      */
-    private suspend fun closedSession(): LocalDate? = lastSession(calendar.load(Market.US), clock.instant())
+    private suspend fun closedSession(): LocalDate? {
+        val now = clock.instant()
+        return lastSession(calendar.on(Market.US, LocalDate.ofInstant(now, NEW_YORK)), now)
+    }
 
     /**
      * Throws unless [proposal] is priced on exactly the last US session that
@@ -338,7 +371,10 @@ internal class SleeveDesk(
                         TestSleeves.PERSONAL,
                         TestSleeves.START,
                     )
-                untracked(owned)?.also { executor.halt(it) }
+                untracked(owned)?.also {
+                    executor.halt(it)
+                    announced = it
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -391,7 +427,9 @@ internal class SleeveDesk(
         val now = clock.instant()
         val today = LocalDate.ofInstant(now, SEOUL)
         val madeToday = proposedAt?.let { LocalDate.ofInstant(it, SEOUL) } == today
-        val early = LocalTime.ofInstant(now, SEOUL) < PROPOSE_AT
+        // A restart in the small hours loses the morning's proposal while its session still trades.
+        val lost = proposedAt == null && inOrderWindow(calendar.hours(Market.US), now)
+        val early = LocalTime.ofInstant(now, SEOUL) < PROPOSE_AT && !lost
         if (madeToday || early || due(today, force = false).isEmpty()) return
         try {
             propose()
@@ -505,13 +543,15 @@ internal class SleeveDesk(
                     proposal.takeIf { settled(sleeve, mine) }
                 }
             }
-        unrecorded(orders, tags, sleeves)?.let { reason ->
+        unrecorded(orders, tags)?.let { reason ->
             executor.halt(reason)
+            announced = reason
             report(Signal(EXECUTION_ID, "-", "자동 주문 중지", reason, clock.instant()))
             log.error("execution halted: {}", reason)
         }
         untracked(owned)?.let { reason ->
             executor.halt(reason)
+            announced = reason
             report(Signal(EXECUTION_ID, "-", "자동 주문 중지", reason, clock.instant()))
             log.error("execution halted: {}", reason)
         }
@@ -527,10 +567,12 @@ internal class SleeveDesk(
                     sleeves.map { it.id },
                 )
             }
+        // The rate only prices the report in won: read it before the proposal counts as made, and
+        // fall back to the last one, so a rate outage never leaves orders due that were never reported.
+        val fx = rateOrLast()
+        this.fx = fx
         proposals = waiting + made
         proposedAt = clock.instant()
-        val fx = fetchUsdKrw(rest)
-        this.fx = fx
         // Everything the evening will place, a carried-over month included.
         val all = proposals
         report(Signal(RULE_ID, "-", "$today 리밸런싱 제안", all.joinToString("\n\n") { text(it, fx) }, clock.instant()))

@@ -823,8 +823,14 @@ class TickguardTest {
                 eventually { alerts.any { "매일 자동 주문 꺼짐" in it } }
                 assertThat(second.sleeves.startDaily()).isNull()
                 eventually { alerts.any { "매일 자동 주문 켜짐" in it } }
+                // Pressed again, from another tab: accepted, and neither announced nor re-run twice.
+                assertThat(second.sleeves.startDaily()).isNull()
                 second.sleeves.requestNow()
                 eventually { alerts.any { "리밸런싱 실행" in it && "✔ D BUY SPY" in it } }
+                assertThat(orderPosts).hasSize(1)
+                assertThat(alerts.count { "매일 자동 주문 켜짐" in it }).isEqualTo(1)
+                // The proposal went out live: another run of it, however prompted, sends nothing.
+                withContext(engine.coroutineContext) { second.sleeves.execute() }
                 assertThat(orderPosts).hasSize(1)
 
                 second.sleeves.stop()

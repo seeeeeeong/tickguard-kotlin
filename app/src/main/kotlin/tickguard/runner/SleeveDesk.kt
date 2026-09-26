@@ -49,6 +49,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The test sleeves, from the service's side: what each holds, from the order
@@ -207,9 +208,15 @@ internal class SleeveDesk(
             synchronized(switching) {
                 val reason =
                     when {
-                        !arming.enabled(trading.enabled) -> "trading is off"
+                        sleeves.isNotEmpty() &&
+                            arming.enabled(
+                                trading.enabled,
+                            ) && arming.daily == sleeves -> return@synchronized ALREADY_ON
+
                         executor.halted != null -> "halted"
+
                         sleeves.isEmpty() -> "no sleeve in DRY_RUN"
+
                         else -> saveDaily(sleeves)
                     }
                 if (reason == null) {
@@ -225,7 +232,8 @@ internal class SleeveDesk(
             log.warn("control: daily live orders on for {}", sleeves)
             replaceDryRun()
         }
-        return refusal
+        // Pressed again while on: nothing to do, and nothing re-run.
+        return refusal.takeIf { it != ALREADY_ON }
     }
 
     /**
@@ -329,9 +337,26 @@ internal class SleeveDesk(
         catchUp()
         val made = proposedAt ?: return
         val now = clock.instant()
-        val due = arming.enabled(trading.enabled) && executedFor != made && Duration.between(made, now) <= STALE_AFTER
-        if (!due || !inOrderWindow(calendar.hours(Market.US), now)) return
-        executedFor = made
+        // A proposal placed live is never run again, whatever reset its run.
+        val due =
+            arming.enabled(trading.enabled) && executedFor != made && liveFor != made &&
+                Duration.between(made, now) <= STALE_AFTER
+        if (!due || !inOrderWindow(calendar.hours(Market.US), now) || !running.compareAndSet(false, true)) return
+        try {
+            executedFor = made
+            run(made, now)
+        } finally {
+            running.set(false)
+        }
+    }
+
+    /** One run at a time: a second press while a run is waiting on the account must not start another. */
+    private val running = AtomicBoolean(false)
+
+    private suspend fun run(
+        made: Instant,
+        now: Instant,
+    ) {
         val plan =
             planOrders(
                 proposals,
@@ -343,8 +368,11 @@ internal class SleeveDesk(
             if (plan.live.isNotEmpty()) liveFor = made
             val result =
                 executor.run(plan) { order ->
+                    // Daily orders have no end of their own: the window is checked again for every order.
+                    val at = clock.instant()
                     arming.enabled(trading.enabled) &&
-                        arming.modes(trading.modes, clock.instant())[order.sleeve] == SleeveMode.LIVE
+                        arming.modes(trading.modes, at)[order.sleeve] == SleeveMode.LIVE &&
+                        inOrderWindow(calendar.hours(Market.US), at)
                 }
             // The run's report says why it halted, if it did.
             announced = executor.halted
@@ -757,6 +785,9 @@ internal class SleeveDesk(
 
         /** Days of bars a monthly proposal fetches again: enough to cover a long weekend's gap. */
         const val OVERLAP_DAYS = 10L
+
+        /** What a second press of an already-on switch amounts to: success, and nothing done. */
+        const val ALREADY_ON = "already on"
 
         /** The sleeves the daily switch may name: the dip sleeves. */
         val DIP_IDS: Set<String> =

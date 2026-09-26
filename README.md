@@ -166,7 +166,8 @@ orders in the window, then offers to buy them.
 |---|---|---|
 | 오늘 주문 목록 불러오기 | Proposes now; places if trading is on and the window open | — |
 | N원 구매하기 → 구매하기 | Runs the `DRY_RUN` sleeves as `LIVE`, then proposes and places at once. An `OFF` sleeve stays off | Until this window closes, or a restart |
-| 중지 (top right) → 멈추기 | No order of any kind; orders already sent are not cancelled | Until a restart |
+| 매일 자동 주문 켜기 → 켜기 | Runs the dip sleeve, configured `DRY_RUN`, live every weekday without a press. Announced in Discord | Until switched off on the page, or by the stop button; kept across restarts in `data/daily-live` |
+| 중지 (top right) → 멈추기 | No order of any kind, and switches daily orders off; orders already sent are not cancelled | Until a restart |
 
 Nothing the page switches survives a restart: `.env` stays the durable setting, so a
 forgotten switch cannot move money next month. Each button sends an `X-Tickguard-Control: 1`

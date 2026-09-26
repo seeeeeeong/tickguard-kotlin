@@ -31,7 +31,7 @@ not a suggestion; the architecture tests enforce what they can.
 | Rule | Why |
 |---|---|
 | Only `POST /api/v1/orders`, only from `tickguard.execution` | One place to review, one place the architecture test allows a request body to an order path |
-| Modes per sleeve: `OFF` / `DRY_RUN` / `LIVE`. `LIVE` is set by the user in configuration, or for one order window on `/control`, which only moves `DRY_RUN` to `LIVE` and is forgotten on restart | A person decides when money moves; `DRY_RUN` builds and reports orders without sending. A switch that outlived its evening would move money a month later |
+| Modes per sleeve: `OFF` / `DRY_RUN` / `LIVE`. `LIVE` is set by the user in configuration, or on `/control`: for one order window (forgotten on restart), or every day until switched off (the user's choice of 2026-09-26; kept in `data/daily-live`, announced in Discord, shown on the page, cleared by the stop button). Either only moves `DRY_RUN` to `LIVE` | A person decides when money moves; `DRY_RUN` builds and reports orders without sending. A switch that outlived its evening would move money a month later |
 | Kill switch `TICKGUARD_TRADING=off` stops every order at once; `/control`'s stop does too, until restart | One line or one button to stop everything, without a deploy |
 | Control routes answer only with the `X-Tickguard-Control` header, and a Claude session never presses them | A form on another site can post to a tailnet address from the user's browser, but cannot set a header |
 | Hard limits: total automated capital, per-order value ≤ the sleeve's capital, orders per day, allowlisted symbols per sleeve, `MARKET` orders only; a sell never exceeds what the sleeve holds | A bug should cost at most the test's capital, never more |

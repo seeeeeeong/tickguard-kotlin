@@ -72,6 +72,8 @@ internal class SleeveDesk(
         Collection<String>,
         LocalDate,
     ) -> RefreshedBars = { _, _ -> RefreshedBars(0, emptyList()) },
+    /** Where the page's daily switch is kept, so a restart keeps it. */
+    private val daily: DailySwitch = NoDailySwitch,
     /** The account's shares by symbol, fresh: what the ledger is checked against before a dip sleeve trades. */
     private val account: suspend () -> Map<String, Decimal> = { emptyMap() },
 ) {
@@ -91,7 +93,7 @@ internal class SleeveDesk(
     @Volatile var fx: Decimal = TestSleeves.FX
         private set
 
-    @Volatile private var arming = Arming()
+    @Volatile private var arming = Arming(daily = daily.load())
 
     @Volatile private var executedFor: Instant? = null
 
@@ -165,8 +167,57 @@ internal class SleeveDesk(
 
     /** The control page's stop: no order of any kind until the process restarts. */
     fun stop() {
+        // Stop means stop: a daily switch left on would start trading again at the next restart.
+        daily.save(emptySet())
         arming = Arming(stopped = true)
-        log.warn("control: trading stopped until restart")
+        log.warn("control: trading stopped until restart, daily orders switched off")
+    }
+
+    /**
+     * The page's "every day": runs the dip sleeves configured `DRY_RUN` live
+     * every weekday until switched off, kept across restarts. Refused with
+     * trading off or stopped, after a halt, or with no dip sleeve in DRY_RUN.
+     * Announced in Discord, as its switching off is.
+     */
+    fun startDaily(): String? {
+        val sleeves =
+            TestSleeves.ALL
+                .filter { it.dip != null && trading.modes[it.id] == SleeveMode.DRY_RUN }
+                .map { it.id }
+                .toSet()
+        val refusal =
+            when {
+                !arming.enabled(trading.enabled) -> "trading is off"
+                executor.halted != null -> "halted"
+                sleeves.isEmpty() -> "no sleeve in DRY_RUN"
+                else -> null
+            }
+        if (refusal == null) {
+            daily.save(sleeves)
+            arming = arming.copy(daily = sleeves)
+            val most = limitsFor(trading.modes).maxBuys.format(2)
+            // Called from a request thread: the report is the engine's to send.
+            val message =
+                Signal(
+                    EXECUTION_ID,
+                    "-",
+                    "매일 자동 주문 켜짐",
+                    "평일마다 ${sleeves.joinToString()} 가 09:00 에 판단하고 그날 밤 버튼 없이 주문합니다 (한 번에 최대 \$$most).",
+                    clock.instant(),
+                )
+            scope.launch { report(message) }
+            log.warn("control: daily live orders on for {}", sleeves)
+        }
+        return refusal
+    }
+
+    /** Switches daily orders off: from the next run the dip sleeves only list their orders again. */
+    fun stopDaily() {
+        daily.save(emptySet())
+        arming = arming.copy(daily = emptySet())
+        val message = Signal(EXECUTION_ID, "-", "매일 자동 주문 꺼짐", "이제 [구매하기]를 눌러야 주문이 나갑니다.", clock.instant())
+        scope.launch { report(message) }
+        log.warn("control: daily live orders off")
     }
 
     /** The test's orders and their sleeves, for the control page, read on the engine like the rest. */
@@ -182,6 +233,8 @@ internal class SleeveDesk(
             halted = executor.halted,
             modes = arming.modes(trading.modes, now),
             liveUntil = arming.liveUntil?.takeIf { arming.isLive(now) },
+            daily = arming.daily.takeIf { !arming.stopped }.orEmpty(),
+            switchable = TestSleeves.ALL.any { it.dip != null && trading.modes[it.id] == SleeveMode.DRY_RUN },
             window = orderWindow(calendar.hours(Market.US)),
             proposedAt = proposedAt,
             proposals = proposals,
@@ -199,6 +252,7 @@ internal class SleeveDesk(
             arming.stopped -> "STOPPED until restart · $modes"
             !trading.enabled -> "off · $modes"
             arming.isLive(now) -> "on · $modes · LIVE until ${clockTime(arming.liveUntil)}"
+            arming.daily.isNotEmpty() -> "on · $modes · daily"
             else -> "on · $modes"
         }
     }
@@ -752,6 +806,10 @@ internal data class DeskState(
     /** Each sleeve's mode in effect, the page's LIVE included. */
     val modes: Map<String, SleeveMode>,
     val liveUntil: Instant?,
+    /** The sleeves switched to trade live every day. */
+    val daily: Set<String>,
+    /** A dip sleeve is configured DRY_RUN, so the daily switch has something to switch. */
+    val switchable: Boolean,
     val window: ClosedRange<Instant>?,
     val proposedAt: Instant?,
     val proposals: List<SleeveProposal>,

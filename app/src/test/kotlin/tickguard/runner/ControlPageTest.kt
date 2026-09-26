@@ -45,12 +45,15 @@ class ControlPageTest {
         stopped: Boolean = false,
         halted: String? = null,
         tradingOn: Boolean = true,
+        daily: Set<String> = emptySet(),
     ) = DeskState(
         tradingOn = tradingOn && !stopped,
         stopped = stopped,
         halted = halted,
         modes = mapOf("A" to SleeveMode.DRY_RUN, "B" to SleeveMode.DRY_RUN, "C" to SleeveMode.DRY_RUN),
         liveUntil = null,
+        daily = daily,
+        switchable = true,
         window = window,
         proposedAt = proposedAt,
         proposals = if (proposedAt == null) emptyList() else listOf(proposal),
@@ -152,5 +155,16 @@ class ControlPageTest {
 
         assertThat(page).contains("자동 주문이 멈췄어요").contains("&lt;b&gt;tg-1&lt;/b&gt;: 503").doesNotContain("<b>tg-1</b>")
         assertThat(page).doesNotContain("openSheet('stop')")
+    }
+
+    @Test
+    fun `offers the daily switch while off, and says it is on with a way to switch it off`() {
+        val off = renderControl(ControlView(desk(proposedAt = evening), evening, emptyList(), emptyMap()))
+        val on =
+            renderControl(ControlView(desk(proposedAt = evening, daily = setOf("D")), evening, emptyList(), emptyMap()))
+
+        assertThat(off).contains("매일 자동 주문</b>").contains("openSheet('dailyOn')").doesNotContain("매일 자동 주문 켜짐")
+        assertThat(on).contains("매일 자동 주문 켜짐").contains("openSheet('dailyOff')").contains("22:40에 자동으로 주문해요")
+        assertThat(on).contains("<span class=\"pill blue\">매일 자동 주문</span>")
     }
 }

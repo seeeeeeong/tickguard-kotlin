@@ -50,6 +50,7 @@ import kotlin.time.Duration.Companion.seconds
  * the socket, a declaration and its ack, ticks, a rule firing, the alert text.
  * Every module is the real one; only the far end of each wire is local.
  */
+@Suppress("LargeClass") // One fake Toss serves every end-to-end test; splitting it would copy it.
 class TickguardTest {
     private val server = MockWebServer()
     private val declarations = CopyOnWriteArrayList<String>()
@@ -248,7 +249,8 @@ class TickguardTest {
                 "TOSS_CLIENT_SECRET" to "secret",
                 "TOSS_ACCOUNT_SEQ" to "1",
                 // Each app its own journal: an order left in one must not halt the next test.
-                "TICKGUARD_PLACEMENTS" to Files.createTempDirectory("placements-").toString(),
+                // Nested, so the daily switch kept beside it is this app's alone too.
+                "TICKGUARD_PLACEMENTS" to Files.createTempDirectory("data-").resolve("placements").toString(),
                 "TICKGUARD_DRAWDOWN_FOR_MS" to "1",
                 "TICKGUARD_GROUP_WAIT_MS" to "1",
             ) + extra
@@ -714,7 +716,7 @@ class TickguardTest {
     fun `reports at once a halt it starts with, from an order a previous process never accounted for`() =
         runTest {
             withContext(Dispatchers.Default) {
-                val journal = Files.createTempDirectory("placements-")
+                val journal = Files.createDirectories(Files.createTempDirectory("data-").resolve("placements"))
                 Files.writeString(journal.resolve("tg-20260928-D-B-SPY"), "D BUY SPY\n")
                 server.dispatcher = FakeToss()
                 server.start()
@@ -785,6 +787,71 @@ class TickguardTest {
                 }
 
                 assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `keeps the daily switch across a restart and places without a press, until stop switches it off`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                val data = Files.createTempDirectory("data-")
+                val env =
+                    mapOf(
+                        "TICKGUARD_TRADING" to "on",
+                        "TICKGUARD_SLEEVE_D" to "DRY_RUN",
+                        "TICKGUARD_PLACEMENTS" to data.resolve("placements").toString(),
+                    )
+                val alerts = CopyOnWriteArrayList<String>()
+                val url = server.url("/").toString().trimEnd('/')
+
+                // The switch pressed in an earlier process, which then went away.
+                assertThat(app(url, CopyOnWriteArrayList(), env, store).sleeves.startDaily()).isNull()
+
+                // A restart: a new process reads the switch back and places the proposal unpressed.
+                val second = app(url, alerts, env, store)
+                engine.launch { second.start() }
+                eventually { second.startup == "ready" }
+                assertThat(second.sleeves.state().daily).containsExactly("D")
+                second.sleeves.stopDaily()
+                eventually { alerts.any { "매일 자동 주문 꺼짐" in it } }
+                assertThat(second.sleeves.startDaily()).isNull()
+                eventually { alerts.any { "매일 자동 주문 켜짐" in it } }
+                second.sleeves.requestNow()
+                eventually { alerts.any { "리밸런싱 실행" in it && "✔ D BUY SPY" in it } }
+                assertThat(orderPosts).hasSize(1)
+
+                second.sleeves.stop()
+                assertThat(DailySwitchFile(data.resolve("daily-live")).load()).isEmpty()
+                withContext(engine.coroutineContext) { second.stop() }
+            }
+        }
+
+    @Test
+    fun `refuses the daily switch while no dip sleeve is in dry run`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+
+                assertThat(app.sleeves.startDaily()).isEqualTo("no sleeve in DRY_RUN")
                 withContext(engine.coroutineContext) { app.stop() }
             }
         }

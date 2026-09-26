@@ -2,6 +2,7 @@ package tickguard.execution
 
 import kotlinx.coroutines.CancellationException
 import tickguard.orders.OrderStore
+import tickguard.stream.Decimal
 import tickguard.trading.Side
 
 /** What the broker said to one order. */
@@ -52,10 +53,11 @@ class Executor(
     private val orders: OrderStore,
     private val journal: PlacementJournal = NoJournal,
     /**
-     * Waits for these orders to fill; false if they did not in time. A sale
-     * accepted is not yet money: a sleeve's buys wait for its sales' fills.
+     * Waits for these orders to fill and returns their proceeds, net of fees;
+     * null if one did not fill in time. A sale accepted is not yet money: a
+     * sleeve's buys wait for its sales' fills, and spend what they brought.
      */
-    private val settled: suspend (List<String>) -> Boolean = { true },
+    private val settled: suspend (List<String>) -> Decimal? = { null },
 ) {
     /** Starts halted when the journal holds an order a previous run never accounted for. */
     @Volatile var halted: String? =
@@ -70,10 +72,10 @@ class Executor(
         val placed = ArrayList<Pair<OrderRequest, String>>()
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
         var stop: Pair<OrderRequest, String>? = null
-        val funding = Funding()
+        val funding = Funding(plan.cash)
         for (request in plan.live) {
             if (halted != null) break
-            if (request.side == Side.BUY && !funding.ready(request.sleeve)) {
+            if (request.side == Side.BUY && !funding.ready(request)) {
                 refused += request to UNFUNDED
             } else {
                 val before = refused.size
@@ -96,10 +98,14 @@ class Executor(
      * spend money the sleeve does not have, which may be the account's other
      * cash. Its sales are waited for once, before its first buy.
      */
-    private inner class Funding {
+    private inner class Funding(
+        private val cash: Map<String, Decimal>,
+    ) {
         private val sales = LinkedHashMap<String, MutableList<String>>()
         private val unfunded = LinkedHashSet<String>()
-        private val checked = LinkedHashSet<String>()
+
+        /** What a sleeve that sold may still spend: its cash and its sales' proceeds, less its buys so far. */
+        private val budget = LinkedHashMap<String, Decimal>()
 
         fun sold(
             sleeve: String,
@@ -112,10 +118,23 @@ class Executor(
             }
         }
 
-        suspend fun ready(sleeve: String): Boolean {
+        /**
+         * Whether [request] may go out: never after its sleeve's sale failed,
+         * and, for a sleeve that sold, only within what its cash and the sales
+         * actually brought, whatever the proposal expected at the close.
+         */
+        suspend fun ready(request: OrderRequest): Boolean {
+            val sleeve = request.sleeve
             val pending = sales[sleeve]
-            if (pending != null && checked.add(sleeve) && !settled(pending)) unfunded += sleeve
-            return sleeve !in unfunded
+            if (pending != null && sleeve !in budget && sleeve !in unfunded) {
+                val proceeds = settled(pending)
+                if (proceeds == null) unfunded += sleeve else budget[sleeve] = (cash[sleeve] ?: Decimal.ZERO) + proceeds
+            }
+            val left = budget[sleeve]
+            val amount = request.amount ?: Decimal.ZERO
+            val fits = left == null || amount <= left
+            if (fits && left != null) budget[sleeve] = left - amount
+            return sleeve !in unfunded && fits
         }
     }
 

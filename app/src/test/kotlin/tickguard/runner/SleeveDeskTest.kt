@@ -66,7 +66,11 @@ class SleeveDeskTest {
     fun `names the replaced sleeves that still hold shares`() {
         val filled =
             tickguard.testing.order("a1", status = "FILLED", symbol = "SPY", price = null)
-        assertThat(leftovers(TestSleeves.ALL, mapOf("A" to listOf(filled)))).containsExactly("A")
-        assertThat(leftovers(TestSleeves.ALL, mapOf("D" to listOf(filled)))).isEmpty()
+        val a = TestSleeves.ALL.single { it.id == "A" }
+        val d = TestSleeves.ALL.single { it.id == "D" }
+        // Either way round: the sleeve that runs must not find the other kind still invested.
+        assertThat(leftovers(d, TestSleeves.ALL, mapOf("A" to listOf(filled)))).containsExactly("A")
+        assertThat(leftovers(a, TestSleeves.ALL, mapOf("D" to listOf(filled)))).containsExactly("D")
+        assertThat(leftovers(d, TestSleeves.ALL, mapOf("D" to listOf(filled)))).isEmpty()
     }
 }

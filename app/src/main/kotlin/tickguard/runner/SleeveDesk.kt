@@ -479,12 +479,12 @@ internal class SleeveDesk(
                 val mine = owned[sleeve.id].orEmpty()
                 val position = position(sleeve, mine)
                 val rules = sleeve.dip
+                val left = leftovers(sleeve, TestSleeves.ALL, owned)
+                check(left.isEmpty()) { "${sleeve.id}: ${left.joinToString()} still hold shares or open orders" }
                 if (rules == null) {
                     proposeRebalance(sleeve, position, bars)
                 } else {
                     complete(sleeve, rules, bars)
-                    val left = leftovers(TestSleeves.ALL, owned)
-                    check(left.isEmpty()) { "${sleeve.id}: ${left.joinToString()} still hold shares or open orders" }
                     // Only a close this fetch returned is known to be final: a row the store kept may be a
                     // bar stored while its session was still trading.
                     val stale =
@@ -651,20 +651,22 @@ private const val TEST_WON = 300_000L
 private const val MAX_ORDERS = 20
 
 /**
- * The sleeves other than the dip sleeves that still hold shares, or have an
- * order open that could fill into some, by their ledgers. The dip sleeve
- * replaced them in the same account and starts from its whole capital in
- * cash, so their shares must be sold or moved first, or the same dollars
- * would be counted twice.
+ * The sleeves of the other kind than [sleeve] that still hold shares, or
+ * have an order open that could fill into some, by their ledgers. The dip
+ * sleeve and the three-sleeve test take turns in one account, each starting
+ * from its whole capital in cash, so whichever runs, the other's shares
+ * must be sold or moved first, or the same dollars would be counted twice.
  */
 internal fun leftovers(
+    sleeve: Sleeve,
     sleeves: List<Sleeve>,
     owned: Map<String, List<Order>>,
 ): List<String> =
     sleeves
-        .filter { sleeve ->
-            val orders = owned[sleeve.id].orEmpty()
-            sleeve.dip == null && (position(sleeve, orders).holdings.isNotEmpty() || orders.any { !it.closed })
+        .filter { other ->
+            val orders = owned[other.id].orEmpty()
+            (other.dip == null) != (sleeve.dip == null) &&
+                (position(other, orders).holdings.isNotEmpty() || orders.any { !it.closed })
         }.map { it.id }
 
 /** A run of the plan, placed or listed, for the control page. */

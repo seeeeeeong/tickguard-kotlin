@@ -256,7 +256,8 @@ internal class SleeveDesk(
     @Suppress("TooGenericExceptionCaught") // Whatever the file did, daily orders are already off.
     fun stopDaily() {
         synchronized(switching) {
-            arming = arming.copy(daily = emptySet())
+            // Tonight's LIVE too: "off" must stop the run under way, whichever switch made it live.
+            arming = arming.copy(daily = emptySet(), liveUntil = null)
             val text =
                 try {
                     daily.save(emptySet())

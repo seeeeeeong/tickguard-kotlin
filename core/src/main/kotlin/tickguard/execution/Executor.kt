@@ -90,7 +90,7 @@ class Executor(
             if (held != null) {
                 refused += request to held
             } else {
-                sendRecorded(request, placed, refused, funding)?.let { (why, reason) ->
+                sendRecorded(request, placed, refused, funding, stillLive)?.let { (why, reason) ->
                     halted = "${request.clientOrderId}: $why"
                     stop = request to reason
                 }
@@ -100,14 +100,16 @@ class Executor(
     }
 
     /** Sends [request], and records a sale's outcome for the buys it funds. Returns why the run must halt, or null. */
+    @Suppress("LongParameterList") // The order, the run's two ledgers, its funding and its switch.
     private suspend fun sendRecorded(
         request: OrderRequest,
         placed: MutableList<Pair<OrderRequest, String>>,
         refused: MutableList<Pair<OrderRequest, PlaceOutcome.Refused>>,
         funding: Funding,
+        stillLive: (OrderRequest) -> Boolean,
     ): Pair<String, String>? {
         val before = refused.size
-        val halt = send(request, placed, refused)
+        val halt = send(request, placed, refused, stillLive)
         if (request.side == Side.SELL) funding.sold(request, placed, refused = refused.size > before)
         return halt
     }
@@ -186,12 +188,15 @@ class Executor(
         request: OrderRequest,
         placed: MutableList<Pair<OrderRequest, String>>,
         refused: MutableList<Pair<OrderRequest, PlaceOutcome.Refused>>,
+        stillLive: (OrderRequest) -> Boolean,
     ): Pair<String, String>? {
         attempt { journal.begin(request) }?.let {
             return "not sent, the journal could not be written ($it)" to
                 "journal not written"
         }
-        return when (val outcome = placer.place(request)) {
+        // The journal is a write to disk: whether the order is still live is asked once more after it.
+        val outcome = if (stillLive(request)) placer.place(request) else SWITCHED_OFF
+        return when (outcome) {
             is PlaceOutcome.Placed -> {
                 placed += request to outcome.orderId
                 // An order no sleeve owns would have its money spent again: its journal entry stays,

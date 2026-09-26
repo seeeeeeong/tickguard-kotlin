@@ -856,6 +856,12 @@ class TickguardTest {
                 // A directory where the file should be: it can be neither read nor deleted.
                 Files.delete(data.resolve("daily-live"))
                 Files.createDirectories(data.resolve("daily-live").resolve("stuck"))
+                val dipEnv = env + ("TICKGUARD_SLEEVE_A" to "OFF") + ("TICKGUARD_SLEEVE_D" to "DRY_RUN")
+                val switching = app(url, CopyOnWriteArrayList(), dipEnv, store)
+                assertThat(switching.sleeves.startDaily()).isEqualTo("could not save the switch")
+                assertThat(switching.sleeves.state().daily).isEmpty()
+                switching.sleeves.stopDaily()
+                assertThat(switching.sleeves.state().daily).isEmpty()
                 val stuck = app(url, CopyOnWriteArrayList(), env, store)
                 stuck.sleeves.stop()
                 assertThat(stuck.sleeves.state().stopped).isTrue()

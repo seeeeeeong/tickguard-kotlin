@@ -199,42 +199,65 @@ internal class SleeveDesk(
                 .filter { it.dip != null && trading.modes[it.id] == SleeveMode.DRY_RUN }
                 .map { it.id }
                 .toSet()
+        // Checked and switched in one step: a stop between the two must not be overwritten.
         val refusal =
-            when {
-                !arming.enabled(trading.enabled) -> "trading is off"
-                executor.halted != null -> "halted"
-                sleeves.isEmpty() -> "no sleeve in DRY_RUN"
-                else -> null
+            synchronized(switching) {
+                when {
+                    !arming.enabled(trading.enabled) -> {
+                        "trading is off"
+                    }
+
+                    executor.halted != null -> {
+                        "halted"
+                    }
+
+                    sleeves.isEmpty() -> {
+                        "no sleeve in DRY_RUN"
+                    }
+
+                    else -> {
+                        saveDaily(sleeves)
+                    }
+                }
             }
         if (refusal == null) {
-            synchronized(switching) {
-                daily.save(sleeves)
-                arming = arming.copy(daily = sleeves)
-            }
             val most = limitsFor(trading.modes).maxBuys.format(2)
+            val text = "평일마다 ${sleeves.joinToString()} 가 09:00 에 판단하고 그날 밤 버튼 없이 주문합니다 (한 번에 최대 \$$most)."
             // Called from a request thread: the report is the engine's to send.
-            val message =
-                Signal(
-                    EXECUTION_ID,
-                    "-",
-                    "매일 자동 주문 켜짐",
-                    "평일마다 ${sleeves.joinToString()} 가 09:00 에 판단하고 그날 밤 버튼 없이 주문합니다 (한 번에 최대 \$$most).",
-                    clock.instant(),
-                )
+            val message = Signal(EXECUTION_ID, "-", "매일 자동 주문 켜짐", text, clock.instant())
             scope.launch { report(message) }
             log.warn("control: daily live orders on for {}", sleeves)
         }
         return refusal
     }
 
-    /** Switches daily orders off: from the next run the dip sleeves only list their orders again. */
-    fun stopDaily() {
-        synchronized(switching) {
-            daily.save(emptySet())
-            arming = arming.copy(daily = emptySet())
+    /** Saves the switch, then turns it on in memory; a switch that could not be saved stays off. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the file did, the switch stays off.
+    private fun saveDaily(sleeves: Set<String>): String? =
+        try {
+            daily.save(sleeves)
+            arming = arming.copy(daily = sleeves)
+            null
+        } catch (failure: Exception) {
+            log.error("control: daily switch not saved: {}", failure.message)
+            "could not save the switch"
         }
-        val message = Signal(EXECUTION_ID, "-", "매일 자동 주문 꺼짐", "이제 [구매하기]를 눌러야 주문이 나갑니다.", clock.instant())
-        scope.launch { report(message) }
+
+    /** Switches daily orders off: in memory first, so a file that will not go cannot keep them on. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the file did, daily orders are already off.
+    fun stopDaily() {
+        val text =
+            synchronized(switching) {
+                arming = arming.copy(daily = emptySet())
+                try {
+                    daily.save(emptySet())
+                    "이제 [구매하기]를 눌러야 주문이 나갑니다."
+                } catch (failure: Exception) {
+                    log.error("control: daily orders off, but the switch file remains: {}", failure.message)
+                    "지금은 꺼졌지만 data/daily-live 파일을 지우지 못함(${failure.message}) — 재시작 전에 지우세요."
+                }
+            }
+        scope.launch { report(Signal(EXECUTION_ID, "-", "매일 자동 주문 꺼짐", text, clock.instant())) }
         log.warn("control: daily live orders off")
     }
 

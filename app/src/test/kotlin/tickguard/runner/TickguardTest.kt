@@ -490,6 +490,8 @@ class TickguardTest {
     fun `runs the dip sleeve, listing its orders first and on LIVE parking its capital in SPY under its own tag`() =
         runTest {
             withContext(Dispatchers.Default) {
+                // The account holds only the user's own symbols, none the dip sleeve trades.
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
                 server.dispatcher = FakeToss()
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
@@ -557,6 +559,7 @@ class TickguardTest {
     fun `halts when an order tagged to the dip sleeve never reached the ledger`() =
         runTest {
             withContext(Dispatchers.Default) {
+                heldJson = """{"symbol":"GOOGL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
                 server.dispatcher = FakeToss()
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
@@ -658,6 +661,37 @@ class TickguardTest {
                         }
                     assertThat(failure).hasMessageContaining("SPY not refreshed through the last US session")
                 }
+
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `halts rather than buy a symbol the account already holds outside the dip sleeve`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                // AAPL bought by hand: the dip sleeve holds none of it, but may buy it.
+                heldJson = """{"symbol":"AAPL","marketCountry":"US","quantity":"1","averagePurchasePrice":"100"}"""
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                seedDipBars(store)
+                val alerts = CopyOnWriteArrayList<String>()
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        alerts,
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                app.sleeves.requestNow()
+                eventually { alerts.any { "자동 주문 중지" in it && "AAPL" in it } }
+                withContext(engine.coroutineContext) { app.sleeves.execute() }
 
                 assertThat(orderPosts).isEmpty()
                 withContext(engine.coroutineContext) { app.stop() }

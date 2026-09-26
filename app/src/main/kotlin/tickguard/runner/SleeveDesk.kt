@@ -367,11 +367,12 @@ internal class SleeveDesk(
                 ledger[code] = (ledger[code] ?: Decimal.ZERO) + quantity
             }
         }
-        val held =
-            dips.flatMap { position(it, owned[it.id].orEmpty()).holdings.keys } + dips.mapNotNull { it.dip?.parking }
-        val off = mismatched(account(), ledger, held.distinct(), TestSleeves.PERSONAL)
+        // Every symbol the sleeve may trade, not only those it holds: shares of a candidate bought
+        // outside it would be mistaken for its own once it buys the same symbol.
+        val symbols = dips.flatMap { it.universe }.distinct()
+        val off = mismatched(account(), ledger, symbols, TestSleeves.PERSONAL)
         return off.takeIf { it.isNotEmpty() }?.let {
-            "계좌 수량이 장부와 다름: ${it.joinToString()} — 기록 안 된 주문이나 주식 분할 확인 필요"
+            "계좌 수량이 장부와 다름: ${it.joinToString()} — 기록 안 된 주문, 주식 분할, 개인 매매 확인 필요"
         }
     }
 

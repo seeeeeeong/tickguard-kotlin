@@ -142,7 +142,9 @@ status page's `trading` line says why. The hard limits live in code, not configu
 `TICKGUARD_SLEEVE_D` runs a dip strategy every weekday on $733.98: a large cap other than the user's own more than 10% under its
 20-day high, above its 200-day average and with RSI(14) under 30 is bought with a sixth of the capital,
 once more 8% lower, and sold at +8% or −20% from its average cost; money not in a dip waits in SPY.
-Three positions at most, never GOOGL. It proposes at 09:00 KST from the last close (bars are
+Three positions at most, never the user's own symbols (AMZN, GOOGL, SPCX); in turn, **none of its
+symbols may be bought by hand**: before it trades, the account's shares of every one of them must
+match the ledgers, or it halts. It proposes at 09:00 KST from the last close (bars are
 refreshed first; a failed refresh retries in 15 minutes rather than pricing on an old close) and
 places in that evening's order window.
 

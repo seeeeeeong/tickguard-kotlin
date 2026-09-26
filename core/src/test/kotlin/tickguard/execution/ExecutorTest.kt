@@ -207,6 +207,29 @@ class ExecutorTest {
         }
 
     @Test
+    fun `sends nothing more once the run is switched off part way`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            var live = true
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    // A person switches daily orders off while the first order is in flight.
+                    live = false
+                    PlaceOutcome.Placed("o-${it.symbol}")
+                }, tags)
+
+            val result = executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList())) { live }
+
+            assertThat(sent).containsExactly("SPY")
+            assertThat(
+                result.refused.map {
+                    it.first.symbol to it.second.message
+                },
+            ).containsExactly("QQQ" to "switched off during the run")
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

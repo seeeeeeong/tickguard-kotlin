@@ -68,14 +68,24 @@ class Executor(
             }?.let { "unaccounted orders from a previous run: ${it.joinToString()}" }
         private set
 
-    suspend fun run(plan: OrderPlan): ExecutionResult {
+    /**
+     * Sends [plan]'s live orders. [stillLive] is asked again right before each
+     * one: a person who switches orders off or stops them mid-run stops the
+     * rest of the run, not just the next one.
+     */
+    suspend fun run(
+        plan: OrderPlan,
+        stillLive: (OrderRequest) -> Boolean = { true },
+    ): ExecutionResult {
         val placed = ArrayList<Pair<OrderRequest, String>>()
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
         var stop: Pair<OrderRequest, String>? = null
         val funding = Funding(plan.cash)
         for (request in plan.live) {
             if (halted != null) break
-            if (request.side == Side.BUY && !funding.ready(request)) {
+            if (!stillLive(request)) {
+                refused += request to SWITCHED_OFF
+            } else if (request.side == Side.BUY && !funding.ready(request)) {
                 refused += request to UNFUNDED
             } else {
                 val before = refused.size
@@ -206,3 +216,6 @@ class Executor(
 
 /** Why a buy was not sent: its sleeve's sale was refused or did not fill, so the money it was sized on never came. */
 private val UNFUNDED = PlaceOutcome.Refused(0, "not-sent", "a sale of its sleeve was refused or did not fill")
+
+/** Why an order was not sent: its sleeve was switched off or stopped while the run was under way. */
+private val SWITCHED_OFF = PlaceOutcome.Refused(0, "not-sent", "switched off during the run")

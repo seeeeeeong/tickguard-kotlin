@@ -27,5 +27,12 @@ internal class PlacementFiles(
         dir.resolve(request.clientOrderId).deleteIfExists()
     }
 
-    override fun pending(): List<String> = dir.listDirectoryEntries().map { it.name }.sorted()
+    /** Only order entries: every client order id starts with `tg-`, and the daily switch lives here too. */
+    override fun pending(): List<String> =
+        dir
+            .listDirectoryEntries()
+            .map {
+                it.name
+            }.filter { it.startsWith("tg-") }
+            .sorted()
 }

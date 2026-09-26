@@ -32,6 +32,11 @@ internal object NoDailySwitch : DailySwitch {
 internal class DailySwitchFile(
     private val path: Path,
 ) : DailySwitch {
+    companion object {
+        /** The file's name in the journal's directory, which the journal leaves alone. */
+        const val NAME = "daily-live"
+    }
+
     /** Unreadable reads as off: a switch that cannot be read must not be taken as on. */
     override fun load(): Set<String> =
         try {

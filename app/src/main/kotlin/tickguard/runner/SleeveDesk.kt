@@ -136,7 +136,7 @@ internal class SleeveDesk(
                 else -> null
             }
         if (refusal == null) {
-            arming = arming.copy(liveUntil = until)
+            synchronized(switching) { arming = arming.copy(liveUntil = until) }
             log.warn("control: DRY_RUN sleeves live until {}", until)
             // The morning's proposal, checked against the session that closed before it, is what
             // was listed and what goes out; proposing again after midnight would price on a guess.
@@ -199,35 +199,27 @@ internal class SleeveDesk(
                 .filter { it.dip != null && trading.modes[it.id] == SleeveMode.DRY_RUN }
                 .map { it.id }
                 .toSet()
-        // Checked and switched in one step: a stop between the two must not be overwritten.
+        // Checked, switched and announced in one step: a stop in between must not be overwritten, and
+        // Discord hears of switches in the order they happened.
         val refusal =
             synchronized(switching) {
-                when {
-                    !arming.enabled(trading.enabled) -> {
-                        "trading is off"
+                val reason =
+                    when {
+                        !arming.enabled(trading.enabled) -> "trading is off"
+                        executor.halted != null -> "halted"
+                        sleeves.isEmpty() -> "no sleeve in DRY_RUN"
+                        else -> saveDaily(sleeves)
                     }
-
-                    executor.halted != null -> {
-                        "halted"
-                    }
-
-                    sleeves.isEmpty() -> {
-                        "no sleeve in DRY_RUN"
-                    }
-
-                    else -> {
-                        saveDaily(sleeves)
-                    }
+                if (reason == null) {
+                    val most = limitsFor(trading.modes).maxBuys.format(2)
+                    announceSwitch(
+                        "매일 자동 주문 켜짐",
+                        "평일마다 ${sleeves.joinToString()} 가 09:00 에 판단하고 그날 밤 버튼 없이 주문합니다 (한 번에 최대 \$$most).",
+                    )
                 }
+                reason
             }
-        if (refusal == null) {
-            val most = limitsFor(trading.modes).maxBuys.format(2)
-            val text = "평일마다 ${sleeves.joinToString()} 가 09:00 에 판단하고 그날 밤 버튼 없이 주문합니다 (한 번에 최대 \$$most)."
-            // Called from a request thread: the report is the engine's to send.
-            val message = Signal(EXECUTION_ID, "-", "매일 자동 주문 켜짐", text, clock.instant())
-            scope.launch { report(message) }
-            log.warn("control: daily live orders on for {}", sleeves)
-        }
+        if (refusal == null) log.warn("control: daily live orders on for {}", sleeves)
         return refusal
     }
 
@@ -246,19 +238,28 @@ internal class SleeveDesk(
     /** Switches daily orders off: in memory first, so a file that will not go cannot keep them on. */
     @Suppress("TooGenericExceptionCaught") // Whatever the file did, daily orders are already off.
     fun stopDaily() {
-        val text =
-            synchronized(switching) {
-                arming = arming.copy(daily = emptySet())
+        synchronized(switching) {
+            arming = arming.copy(daily = emptySet())
+            val text =
                 try {
                     daily.save(emptySet())
                     "이제 [구매하기]를 눌러야 주문이 나갑니다."
                 } catch (failure: Exception) {
                     log.error("control: daily orders off, but the switch file remains: {}", failure.message)
-                    "지금은 꺼졌지만 data/daily-live 파일을 지우지 못함(${failure.message}) — 재시작 전에 지우세요."
+                    "지금은 꺼졌지만 스위치 파일을 지우지 못함(${failure.message}) — 재시작 전에 지우세요."
                 }
-            }
-        scope.launch { report(Signal(EXECUTION_ID, "-", "매일 자동 주문 꺼짐", text, clock.instant())) }
+            announceSwitch("매일 자동 주문 꺼짐", text)
+        }
         log.warn("control: daily live orders off")
+    }
+
+    /** Queues a switch's Discord message on the engine, which sends what it is given in order. */
+    private fun announceSwitch(
+        title: String,
+        text: String,
+    ) {
+        val message = Signal(EXECUTION_ID, "-", title, text, clock.instant())
+        scope.launch { report(message) }
     }
 
     /** The test's orders and their sleeves, for the control page, read on the engine like the rest. */
@@ -322,7 +323,11 @@ internal class SleeveDesk(
             )
         if (verified(plan)) {
             if (plan.live.isNotEmpty()) liveFor = made
-            val result = executor.run(plan)
+            val result =
+                executor.run(plan) { order ->
+                    arming.enabled(trading.enabled) &&
+                        arming.modes(trading.modes, clock.instant())[order.sleeve] == SleeveMode.LIVE
+                }
             // The run's report says why it halted, if it did.
             announced = executor.halted
             lastRun = LastRun(now, plan, result)

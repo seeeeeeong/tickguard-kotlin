@@ -828,7 +828,7 @@ class TickguardTest {
                 assertThat(orderPosts).hasSize(1)
 
                 second.sleeves.stop()
-                assertThat(DailySwitchFile(data.resolve("daily-live")).load()).isEmpty()
+                assertThat(DailySwitchFile(data.resolve("placements").resolve("daily-live")).load()).isEmpty()
                 withContext(engine.coroutineContext) { second.stop() }
             }
         }
@@ -841,7 +841,8 @@ class TickguardTest {
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
                 val data = Files.createTempDirectory("data-")
-                Files.writeString(data.resolve("daily-live"), "A\n")
+                val switch = Files.createDirectories(data.resolve("placements")).resolve("daily-live")
+                Files.writeString(switch, "A\n")
                 val env =
                     mapOf(
                         "TICKGUARD_TRADING" to "on",
@@ -854,8 +855,8 @@ class TickguardTest {
                 assertThat(app(url, CopyOnWriteArrayList(), env, store).sleeves.state().daily).isEmpty()
 
                 // A directory where the file should be: it can be neither read nor deleted.
-                Files.delete(data.resolve("daily-live"))
-                Files.createDirectories(data.resolve("daily-live").resolve("stuck"))
+                Files.delete(switch)
+                Files.createDirectories(switch.resolve("stuck"))
                 val dipEnv = env + ("TICKGUARD_SLEEVE_A" to "OFF") + ("TICKGUARD_SLEEVE_D" to "DRY_RUN")
                 val switching = app(url, CopyOnWriteArrayList(), dipEnv, store)
                 assertThat(switching.sleeves.startDaily()).isEqualTo("could not save the switch")

@@ -313,6 +313,13 @@ class Tickguard(
             calendar,
             engine,
             refresh = { codes, from -> tasks.refreshBars(codes, from) },
+            // Inside the journal's directory, the one place configuration requires to persist.
+            daily =
+                DailySwitchFile(
+                    java.nio.file.Path
+                        .of(config.placements)
+                        .resolve(DailySwitchFile.NAME),
+                ),
             account = {
                 // A failed or unconfirmed refresh returns the last snapshot; only a fresh one is the account now.
                 val asked = clock.instant()

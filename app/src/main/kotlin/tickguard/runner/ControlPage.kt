@@ -90,11 +90,13 @@ internal fun renderControl(view: ControlView): String {
         |  <div class="note ${screen.noteTone}">${screen.note}</div>
         |</section>
         |${groups(view)}
+        |${dailyCard(view.desk)}
         |</main>
         |<div class="cta">${screen.button}</div>
         |<div id="toast" hidden></div>
         |${buySheet(view.desk)}
         |$STOP_SHEET
+        |$DAILY_SHEETS
         |<script>$SCRIPT</script>
         |
         """.trimMargin()
@@ -105,6 +107,7 @@ private fun pill(desk: DeskState): String {
         when {
             desk.halted != null || desk.stopped -> "멈춤" to "red"
             !desk.tradingOn -> "꺼짐" to "grey"
+            desk.daily.isNotEmpty() -> "매일 자동 주문" to "blue"
             desk.liveUntil != null -> "실제 주문 중" to "blue"
             else -> "연습 모드" to "grey"
         }
@@ -179,10 +182,23 @@ private fun screen(
         }
 
         Stage.WAIT -> {
-            if (open) {
-                planned.copy(note = "주문 준비 중이에요 · 1분 안에 끝나요", button = disabled("준비 중…"))
-            } else {
-                planned.copy(note = later, button = disabled(laterButton))
+            when {
+                open -> {
+                    planned.copy(note = "주문 준비 중이에요 · 1분 안에 끝나요", button = disabled("준비 중…"))
+                }
+
+                desk.daily.isNotEmpty() && opensAt != null && view.now < opensAt -> {
+                    val at = "${CLOCK.format(opensAt)}에 자동으로 주문해요"
+                    planned.copy(
+                        note = "$at · ${until(view.now, opensAt)} 남음",
+                        noteTone = "blue",
+                        button = disabled(at),
+                    )
+                }
+
+                else -> {
+                    planned.copy(note = later, button = disabled(laterButton))
+                }
             }
         }
 
@@ -345,6 +361,28 @@ private fun buySheet(desk: DeskState): String {
         """.trimMargin()
 }
 
+/**
+ * The daily switch, below the day's orders: on, it says so and offers to
+ * switch off; off, it offers to switch on, only while a dip sleeve is
+ * configured DRY_RUN and trading is on, which is when it would do anything.
+ */
+private fun dailyCard(desk: DeskState): String =
+    when {
+        desk.daily.isNotEmpty() -> {
+            "<section class=\"daily on\"><div><b>매일 자동 주문 켜짐</b><span>평일 밤마다 반등형이 버튼 없이 사고팔아요</span></div>" +
+                "<button class=\"ghost small\" onclick=\"openSheet('dailyOff')\">끄기</button></section>"
+        }
+
+        desk.switchable && desk.tradingOn && desk.halted == null -> {
+            "<section class=\"daily\"><div><b>매일 자동 주문</b><span>켜면 [구매하기] 없이 매일 알아서 주문해요</span></div>" +
+                "<button class=\"primary small\" onclick=\"openSheet('dailyOn')\">켜기</button></section>"
+        }
+
+        else -> {
+            ""
+        }
+    }
+
 private fun <T> List<T>.total(value: (T) -> Decimal?): Decimal =
     mapNotNull(value).fold(Decimal.ZERO) { sum, next -> sum + next }
 
@@ -436,12 +474,27 @@ private val STATUS =
 /** Times as a person in Seoul reads them. */
 private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm").withZone(SEOUL)
 
+/** The confirmations for the daily switch: what switching on lets go, and what switching off leaves behind. */
+private val DAILY_SHEETS =
+    """
+    <dialog id="dailyOn" class="sheet">
+      <h2>매일 자동으로 주문할까요?</h2>
+      <p>평일마다 09:00에 판단하고, 그날 밤 버튼 없이 주문해요.<br>한 번에 최대 ${'$'}733.98까지예요. 켜고 끌 때마다 Discord로 알려드려요.</p>
+      <div class="btns"><button class="ghost" onclick="closeSheet('dailyOn')">취소</button><button class="primary" onclick="dailyOn()">켜기</button></div>
+    </dialog>
+    <dialog id="dailyOff" class="sheet">
+      <h2>매일 자동 주문을 끌까요?</h2>
+      <p>다음 주문부터는 [구매하기]를 눌러야 나가요.<br>이미 넣은 주문과 보유 주식은 그대로예요.</p>
+      <div class="btns"><button class="ghost" onclick="closeSheet('dailyOff')">취소</button><button class="danger" onclick="dailyOff()">끄기</button></div>
+    </dialog>
+    """.trimIndent()
+
 /** The confirmation for stop: what it blocks, and what it cannot take back. */
 private val STOP_SHEET =
     """
     <dialog id="stop" class="sheet">
       <h2>자동 주문을 모두 멈출까요?</h2>
-      <p>지금부터 어떤 주문도 나가지 않아요.<br>이미 넣은 주문은 취소되지 않아요. 토스증권 앱에서 확인하세요.</p>
+      <p>지금부터 어떤 주문도 나가지 않고, 매일 자동 주문도 꺼져요.<br>이미 넣은 주문은 취소되지 않아요. 토스증권 앱에서 확인하세요.</p>
       <div class="btns"><button class="ghost" onclick="closeSheet('stop')">취소</button><button class="danger" onclick="stopAll()">멈추기</button></div>
     </dialog>
     """.trimIndent()
@@ -507,6 +560,11 @@ private val STYLE =
     .sheet h2 { font-size:22px; margin:0 0 8px } .sheet p { color:var(--sub); margin:0 0 16px; font-size:15px }
     .sheet ul { list-style:none; padding:14px 16px; margin:0 0 20px; background:var(--grey-bg); border-radius:14px }
     .sheet li { display:flex; justify-content:space-between; padding:4px 0; font-size:15px }
+    .daily { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--card); border-radius:20px;
+      padding:18px 22px; margin-bottom:12px }
+    .daily b { display:block; font-size:16px } .daily span { display:block; color:var(--dim); font-size:13px }
+    .daily.on b { color:var(--blue) }
+    button.small { width:auto; margin:0; padding:10px 16px; font-size:15px; flex:none }
     .btns { display:flex; gap:8px } .btns button { margin:0 } .btns .ghost { flex:1 } .btns .primary, .btns .danger { flex:2 }
     """.trimIndent()
 
@@ -532,5 +590,7 @@ private val SCRIPT =
     function load() { send('/sleeves/rebalance', '목록을 불러왔어요'); }
     function buy() { closeSheet('buy'); send('/sleeves/live', '주문을 넣었어요 · 체결을 확인하는 중이에요'); }
     function stopAll() { closeSheet('stop'); send('/sleeves/stop', '자동 주문을 멈췄어요'); }
+    function dailyOn() { closeSheet('dailyOn'); send('/sleeves/daily/on', '매일 자동 주문을 켰어요'); }
+    function dailyOff() { closeSheet('dailyOff'); send('/sleeves/daily/off', '매일 자동 주문을 껐어요'); }
     setInterval(() => { if (!busy) location.reload(); }, 15000);
     """.trimIndent()

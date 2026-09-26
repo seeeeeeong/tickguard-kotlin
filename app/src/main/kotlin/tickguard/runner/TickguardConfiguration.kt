@@ -127,6 +127,20 @@ class TickguardConfiguration {
                     }
                 }
             }
+            POST("/sleeves/daily/on") { request ->
+                guarded(request) {
+                    when (val refusal = app.sleeves.startDaily()) {
+                        null -> ServerResponse.ok().body("daily live orders on\n")
+                        else -> ServerResponse.status(HttpStatus.CONFLICT).body("refused: $refusal\n")
+                    }
+                }
+            }
+            POST("/sleeves/daily/off") { request ->
+                guarded(request) {
+                    app.sleeves.stopDaily()
+                    ServerResponse.ok().body("daily live orders off\n")
+                }
+            }
             POST("/sleeves/stop") { request ->
                 guarded(request) {
                     app.sleeves.stop()

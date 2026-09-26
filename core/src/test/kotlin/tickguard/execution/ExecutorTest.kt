@@ -207,6 +207,86 @@ class ExecutorTest {
         }
 
     @Test
+    fun `sends nothing more once the run is switched off part way`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            var live = true
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    // A person switches daily orders off while the first order is in flight.
+                    live = false
+                    PlaceOutcome.Placed("o-${it.symbol}")
+                }, tags)
+
+            val result = executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList())) { live }
+
+            assertThat(sent).containsExactly("SPY")
+            assertThat(
+                result.refused.map {
+                    it.first.symbol to it.second.message
+                },
+            ).containsExactly("QQQ" to "switched off during the run")
+        }
+
+    @Test
+    fun `ends the run at the first switch off, even if switched back on, and asks again after waiting on a sale`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val sell = OrderRequest("tg-20261102-D-S-SPY", "D", "SPY", Side.SELL, null, decimal("0.2"))
+            val dipBuy = OrderRequest("tg-20261102-D-B-AAPL", "D", "AAPL", Side.BUY, decimal("100"), null)
+            // The sale is asked three times (before, after the funding step, after the journal); the buy
+            // is live before its wait and off after it.
+            val answers = ArrayDeque(listOf(true, true, true, true, false))
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("o-${it.symbol}")
+                }, tags, NoJournal) { decimal("200") }
+
+            // Live for the sale, then switched off while the buy waited on its fill, then on again.
+            val result =
+                executor.run(
+                    OrderPlan(
+                        listOf(sell, dipBuy, buy("QQQ")),
+                        emptyList(),
+                        emptyList(),
+                        mapOf("D" to decimal("0")),
+                    ),
+                ) {
+                    answers.removeFirstOrNull() ?: true
+                }
+
+            assertThat(sent).containsExactly("SPY")
+            assertThat(result.refused.map { it.first.symbol }).containsExactly("AAPL", "QQQ")
+        }
+
+    @Test
+    fun `asks once more after writing the journal, and clears the entry when switched off meanwhile`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val journal = MemoryJournal()
+            var asked = 0
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("o")
+                }, tags, journal)
+
+            // Live at the checks before the journal, off at the one after it, then on again for the next order.
+            val result =
+                executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList())) {
+                    ++asked !=
+                        3
+                }
+
+            assertThat(sent).isEmpty()
+            assertThat(result.refused.map { it.first.symbol to it.second.message })
+                .containsExactly("SPY" to "switched off during the run", "QQQ" to "switched off during the run")
+            assertThat(journal.pending()).isEmpty()
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

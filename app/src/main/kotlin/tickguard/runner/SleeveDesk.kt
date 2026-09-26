@@ -49,6 +49,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The test sleeves, from the service's side: what each holds, from the order
@@ -72,6 +73,8 @@ internal class SleeveDesk(
         Collection<String>,
         LocalDate,
     ) -> RefreshedBars = { _, _ -> RefreshedBars(0, emptyList()) },
+    /** Where the page's daily switch is kept, so a restart keeps it. */
+    private val daily: DailySwitch = NoDailySwitch,
     /** The account's shares by symbol, fresh: what the ledger is checked against before a dip sleeve trades. */
     private val account: suspend () -> Map<String, Decimal> = { emptyMap() },
 ) {
@@ -91,7 +94,11 @@ internal class SleeveDesk(
     @Volatile var fx: Decimal = TestSleeves.FX
         private set
 
-    @Volatile private var arming = Arming()
+    // Only dip sleeves are ever switched daily: anything else in the file is ignored, never made live.
+    @Volatile private var arming = Arming(daily = daily.load().filter { it in DIP_IDS }.toSet())
+
+    /** Serialises the switch's file and [arming], so two presses cannot leave them disagreeing. */
+    private val switching = Any()
 
     @Volatile private var executedFor: Instant? = null
 
@@ -130,7 +137,7 @@ internal class SleeveDesk(
                 else -> null
             }
         if (refusal == null) {
-            arming = arming.copy(liveUntil = until)
+            synchronized(switching) { arming = arming.copy(liveUntil = until) }
             log.warn("control: DRY_RUN sleeves live until {}", until)
             // The morning's proposal, checked against the session that closed before it, is what
             // was listed and what goes out; proposing again after midnight would price on a guess.
@@ -164,9 +171,116 @@ internal class SleeveDesk(
     @Volatile private var liveFor: Instant? = null
 
     /** The control page's stop: no order of any kind until the process restarts. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the file did, orders are already stopped.
     fun stop() {
-        arming = Arming(stopped = true)
-        log.warn("control: trading stopped until restart")
+        synchronized(switching) {
+            // Orders stop first, in memory, whatever happens to the file after.
+            val wasDaily = arming.daily.isNotEmpty()
+            arming = Arming(stopped = true)
+            try {
+                // Stop means stop: a daily switch left on would start trading again at the next restart.
+                daily.save(emptySet())
+                if (wasDaily) announceSwitch("매일 자동 주문 꺼짐", "긴급 중지로 매일 자동 주문도 꺼졌습니다.")
+                log.warn("control: trading stopped until restart, daily orders switched off")
+            } catch (failure: Exception) {
+                val message = "긴급 중지는 됐지만 매일 자동 주문 파일을 지우지 못함: ${failure.message} — 재시작 전에 ${daily.location} 를 지우세요"
+                announceSwitch("자동 주문 중지", message)
+                log.error("control: trading stopped, but the daily switch file remains: {}", failure.message)
+            }
+        }
+    }
+
+    /**
+     * The page's "every day": runs the dip sleeves configured `DRY_RUN` live
+     * every weekday until switched off, kept across restarts. Refused with
+     * trading off or stopped, after a halt, or with no dip sleeve in DRY_RUN.
+     * Announced in Discord, as its switching off is.
+     */
+    fun startDaily(): String? {
+        val sleeves =
+            TestSleeves.ALL
+                .filter { it.dip != null && trading.modes[it.id] == SleeveMode.DRY_RUN }
+                .map { it.id }
+                .toSet()
+        // Checked, switched and announced in one step: a stop in between must not be overwritten, and
+        // Discord hears of switches in the order they happened.
+        val refusal =
+            synchronized(switching) {
+                val reason =
+                    when {
+                        !arming.enabled(trading.enabled) -> "trading is off"
+                        sleeves.isNotEmpty() && arming.daily == sleeves -> return@synchronized ALREADY_ON
+                        executor.halted != null -> "halted"
+                        sleeves.isEmpty() -> "no sleeve in DRY_RUN"
+                        else -> saveDaily(sleeves)
+                    }
+                if (reason == null) {
+                    val most = limitsFor(trading.modes).maxBuys.format(2)
+                    announceSwitch(
+                        "매일 자동 주문 켜짐",
+                        "평일마다 ${sleeves.joinToString()} 가 09:00 에 판단하고 그날 밤 버튼 없이 주문합니다 (한 번에 최대 \$$most).",
+                    )
+                }
+                reason
+            }
+        if (refusal == null) {
+            log.warn("control: daily live orders on for {}", sleeves)
+            replaceDryRun()
+        }
+        // Pressed again while on: nothing to do, and nothing re-run.
+        return refusal.takeIf { it != ALREADY_ON }
+    }
+
+    /**
+     * Places the current proposal live if it has only been listed so far:
+     * switching daily orders on during tonight's window means tonight.
+     */
+    private fun replaceDryRun() {
+        val made = proposedAt
+        if (made != null && liveFor != made && Duration.between(made, clock.instant()) <= STALE_AFTER) {
+            executedFor = null
+            scope.launch { execute() }
+        }
+    }
+
+    /** Saves the switch, then turns it on in memory; a switch that could not be saved stays off. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the file did, the switch stays off.
+    private fun saveDaily(sleeves: Set<String>): String? =
+        try {
+            daily.save(sleeves)
+            arming = arming.copy(daily = sleeves)
+            null
+        } catch (failure: Exception) {
+            log.error("control: daily switch not saved: {}", failure.message)
+            "could not save the switch"
+        }
+
+    /** Switches daily orders off: in memory first, so a file that will not go cannot keep them on. */
+    @Suppress("TooGenericExceptionCaught") // Whatever the file did, daily orders are already off.
+    fun stopDaily() {
+        synchronized(switching) {
+            // Tonight's LIVE too: "off" must stop the run under way, whichever switch made it live.
+            arming = arming.copy(daily = emptySet(), liveUntil = null)
+            val text =
+                try {
+                    daily.save(emptySet())
+                    "이제 [구매하기]를 눌러야 주문이 나갑니다."
+                } catch (failure: Exception) {
+                    log.error("control: daily orders off, but the switch file remains: {}", failure.message)
+                    "지금은 꺼졌지만 스위치 파일을 지우지 못함(${failure.message}) — 재시작 전에 ${daily.location} 를 지우세요."
+                }
+            announceSwitch("매일 자동 주문 꺼짐", text)
+        }
+        log.warn("control: daily live orders off")
+    }
+
+    /** Queues a switch's Discord message on the engine, which sends what it is given in order. */
+    private fun announceSwitch(
+        title: String,
+        text: String,
+    ) {
+        val message = Signal(EXECUTION_ID, "-", title, text, clock.instant())
+        scope.launch { report(message) }
     }
 
     /** The test's orders and their sleeves, for the control page, read on the engine like the rest. */
@@ -182,6 +296,8 @@ internal class SleeveDesk(
             halted = executor.halted,
             modes = arming.modes(trading.modes, now),
             liveUntil = arming.liveUntil?.takeIf { arming.isLive(now) },
+            daily = arming.daily.takeIf { !arming.stopped }.orEmpty(),
+            switchable = TestSleeves.ALL.any { it.dip != null && trading.modes[it.id] == SleeveMode.DRY_RUN },
             window = orderWindow(calendar.hours(Market.US)),
             proposedAt = proposedAt,
             proposals = proposals,
@@ -199,6 +315,7 @@ internal class SleeveDesk(
             arming.stopped -> "STOPPED until restart · $modes"
             !trading.enabled -> "off · $modes"
             arming.isLive(now) -> "on · $modes · LIVE until ${clockTime(arming.liveUntil)}"
+            arming.daily.isNotEmpty() -> "on · $modes · daily"
             else -> "on · $modes"
         }
     }
@@ -215,9 +332,26 @@ internal class SleeveDesk(
         catchUp()
         val made = proposedAt ?: return
         val now = clock.instant()
-        val due = arming.enabled(trading.enabled) && executedFor != made && Duration.between(made, now) <= STALE_AFTER
-        if (!due || !inOrderWindow(calendar.hours(Market.US), now)) return
-        executedFor = made
+        // A proposal placed live is never run again, whatever reset its run.
+        val due =
+            arming.enabled(trading.enabled) && executedFor != made && liveFor != made &&
+                Duration.between(made, now) <= STALE_AFTER
+        if (!due || !inOrderWindow(calendar.hours(Market.US), now) || !running.compareAndSet(false, true)) return
+        try {
+            executedFor = made
+            run(made, now)
+        } finally {
+            running.set(false)
+        }
+    }
+
+    /** One run at a time: a second press while a run is waiting on the account must not start another. */
+    private val running = AtomicBoolean(false)
+
+    private suspend fun run(
+        made: Instant,
+        now: Instant,
+    ) {
         val plan =
             planOrders(
                 proposals,
@@ -227,7 +361,14 @@ internal class SleeveDesk(
             )
         if (verified(plan)) {
             if (plan.live.isNotEmpty()) liveFor = made
-            val result = executor.run(plan)
+            val result =
+                executor.run(plan) { order ->
+                    // Daily orders have no end of their own: the window is checked again for every order.
+                    val at = clock.instant()
+                    arming.enabled(trading.enabled) &&
+                        arming.modes(trading.modes, at)[order.sleeve] == SleeveMode.LIVE &&
+                        inOrderWindow(calendar.hours(Market.US), at)
+                }
             // The run's report says why it halted, if it did.
             announced = executor.halted
             lastRun = LastRun(now, plan, result)
@@ -640,6 +781,16 @@ internal class SleeveDesk(
         /** Days of bars a monthly proposal fetches again: enough to cover a long weekend's gap. */
         const val OVERLAP_DAYS = 10L
 
+        /** What a second press of an already-on switch amounts to: success, and nothing done. */
+        const val ALREADY_ON = "already on"
+
+        /** The sleeves the daily switch may name: the dip sleeves. */
+        val DIP_IDS: Set<String> =
+            TestSleeves.ALL
+                .filter { it.dip != null }
+                .map { it.id }
+                .toSet()
+
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
 
@@ -752,6 +903,10 @@ internal data class DeskState(
     /** Each sleeve's mode in effect, the page's LIVE included. */
     val modes: Map<String, SleeveMode>,
     val liveUntil: Instant?,
+    /** The sleeves switched to trade live every day. */
+    val daily: Set<String>,
+    /** A dip sleeve is configured DRY_RUN, so the daily switch has something to switch. */
+    val switchable: Boolean,
     val window: ClosedRange<Instant>?,
     val proposedAt: Instant?,
     val proposals: List<SleeveProposal>,

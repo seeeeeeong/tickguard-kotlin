@@ -34,4 +34,14 @@ class ArmingTest {
         assertThat(stopped.isLive(now)).isFalse()
         assertThat(Arming(liveUntil = now.plusSeconds(60)).enabled(configured = false)).isFalse()
     }
+
+    @Test
+    fun `runs a dry-run sleeve switched to daily live every day, never an off one, and not once stopped`() {
+        val daily = Arming(daily = setOf("A", "B"))
+
+        assertThat(daily.modes(configured, now.plusSeconds(86_400 * 30L)))
+            .containsEntry("A", SleeveMode.LIVE)
+            .containsEntry("B", SleeveMode.OFF)
+        assertThat(daily.copy(stopped = true).modes(configured, now)).containsEntry("A", SleeveMode.DRY_RUN)
+    }
 }

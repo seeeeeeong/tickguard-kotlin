@@ -20,4 +20,12 @@ class PlacementFilesTest {
         PlacementFiles(dir).done(request)
         assertThat(PlacementFiles(dir).pending()).isEmpty()
     }
+
+    @Test
+    fun `counts only order entries, not the daily switch kept beside them`() {
+        val dir = Files.createTempDirectory("placements-")
+        Files.writeString(dir.resolve("daily-live"), "D\n")
+
+        assertThat(PlacementFiles(dir.toString()).pending()).isEmpty()
+    }
 }

@@ -68,28 +68,70 @@ class Executor(
             }?.let { "unaccounted orders from a previous run: ${it.joinToString()}" }
         private set
 
-    suspend fun run(plan: OrderPlan): ExecutionResult {
+    /**
+     * Sends [plan]'s live orders. [stillLive] is asked again right before each
+     * one: a person who switches orders off or stops them mid-run stops the
+     * rest of the run, not just the next one.
+     */
+    suspend fun run(
+        plan: OrderPlan,
+        stillLive: (OrderRequest) -> Boolean = { true },
+    ): ExecutionResult {
         val placed = ArrayList<Pair<OrderRequest, String>>()
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
         var stop: Pair<OrderRequest, String>? = null
         val funding = Funding(plan.cash)
+        // Once switched off, the run is over: switching back on must not send the rest of an old plan.
+        var off = false
         for (request in plan.live) {
             if (halted != null) break
-            if (request.side == Side.BUY && !funding.ready(request)) {
-                refused += request to UNFUNDED
+            val held = if (off) SWITCHED_OFF else hold(request, funding, stillLive)
+            off = off || held === SWITCHED_OFF
+            if (held != null) {
+                refused += request to held
             } else {
-                val before = refused.size
-                send(request, placed, refused)?.let { (why, reason) ->
+                sendRecorded(request, placed, refused, funding, stillLive)?.let { (why, reason) ->
                     halted = "${request.clientOrderId}: $why"
                     stop = request to reason
                 }
-                if (request.side == Side.SELL) {
-                    val id = placed.lastOrNull()?.takeIf { it.first == request }?.second
-                    funding.sold(request.sleeve, id, refused = refused.size > before)
-                }
+                // Switched off between the journal and the request: the run ends here too.
+                off = refused.lastOrNull()?.let { it.first == request && it.second === SWITCHED_OFF } == true
             }
         }
         return ExecutionResult(placed, refused, stop)
+    }
+
+    /** Sends [request], and records a sale's outcome for the buys it funds. Returns why the run must halt, or null. */
+    @Suppress("LongParameterList") // The order, the run's two ledgers, its funding and its switch.
+    private suspend fun sendRecorded(
+        request: OrderRequest,
+        placed: MutableList<Pair<OrderRequest, String>>,
+        refused: MutableList<Pair<OrderRequest, PlaceOutcome.Refused>>,
+        funding: Funding,
+        stillLive: (OrderRequest) -> Boolean,
+    ): Pair<String, String>? {
+        val before = refused.size
+        val halt = send(request, placed, refused, stillLive)
+        if (request.side == Side.SELL) funding.sold(request, placed, refused = refused.size > before)
+        return halt
+    }
+
+    /**
+     * Why [request] must not go out now, or null. A buy may wait on its
+     * sales' fills, so whether it is still live is asked again after the wait.
+     */
+    private suspend fun hold(
+        request: OrderRequest,
+        funding: Funding,
+        stillLive: (OrderRequest) -> Boolean,
+    ): PlaceOutcome.Refused? {
+        if (!stillLive(request)) return SWITCHED_OFF
+        val funded = request.side != Side.BUY || funding.ready(request)
+        return when {
+            !stillLive(request) -> SWITCHED_OFF
+            !funded -> UNFUNDED
+            else -> null
+        }
     }
 
     /**
@@ -107,14 +149,16 @@ class Executor(
         /** What a sleeve that sold may still spend: its cash and its sales' proceeds, less its buys so far. */
         private val budget = LinkedHashMap<String, Decimal>()
 
+        /** Records [sale]'s outcome: its order, if the last placed was it, or an unfunded sleeve. */
         fun sold(
-            sleeve: String,
-            orderId: String?,
+            sale: OrderRequest,
+            placed: List<Pair<OrderRequest, String>>,
             refused: Boolean,
         ) {
+            val orderId = placed.lastOrNull()?.takeIf { it.first == sale }?.second
             when {
-                refused || orderId == null -> unfunded += sleeve
-                else -> sales.getOrPut(sleeve) { ArrayList() } += orderId
+                refused || orderId == null -> unfunded += sale.sleeve
+                else -> sales.getOrPut(sale.sleeve) { ArrayList() } += orderId
             }
         }
 
@@ -146,12 +190,15 @@ class Executor(
         request: OrderRequest,
         placed: MutableList<Pair<OrderRequest, String>>,
         refused: MutableList<Pair<OrderRequest, PlaceOutcome.Refused>>,
+        stillLive: (OrderRequest) -> Boolean,
     ): Pair<String, String>? {
         attempt { journal.begin(request) }?.let {
             return "not sent, the journal could not be written ($it)" to
                 "journal not written"
         }
-        return when (val outcome = placer.place(request)) {
+        // The journal is a write to disk: whether the order is still live is asked once more after it.
+        val outcome = if (stillLive(request)) placer.place(request) else SWITCHED_OFF
+        return when (outcome) {
             is PlaceOutcome.Placed -> {
                 placed += request to outcome.orderId
                 // An order no sleeve owns would have its money spent again: its journal entry stays,
@@ -206,3 +253,6 @@ class Executor(
 
 /** Why a buy was not sent: its sleeve's sale was refused or did not fill, so the money it was sized on never came. */
 private val UNFUNDED = PlaceOutcome.Refused(0, "not-sent", "a sale of its sleeve was refused or did not fill")
+
+/** Why an order was not sent: its sleeve was switched off or stopped while the run was under way. */
+private val SWITCHED_OFF = PlaceOutcome.Refused(0, "not-sent", "switched off during the run")

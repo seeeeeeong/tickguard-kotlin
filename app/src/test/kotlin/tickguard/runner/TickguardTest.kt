@@ -1,5 +1,6 @@
 package tickguard.runner
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -71,10 +72,13 @@ class TickguardTest {
     /**
      * Open from an hour ago to three hours from now: the SLA watcher counts the
      * market open, and the order window (ten minutes after the open to an hour
-     * before the close) is open too.
+     * before the close) is open too. Yesterday's session has closed, so the
+     * seeded bars, which end yesterday, are the latest.
      */
     private fun calendar() =
-        """{"result":{"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(3)}"}}}}"""
+        """{"result":{"previousBusinessDay":{"date":"$previousSession",""" +
+            """"regularMarket":{"startTime":"${seoul(-30)}","endTime":"${seoul(-24)}"}},""" +
+            """"today":{"date":"x","regularMarket":{"startTime":"${seoul(-1)}","endTime":"${seoul(3)}"}}}}"""
 
     /** One fresh headline about AAPL, published ten minutes ago. */
     private fun feed() =
@@ -112,6 +116,9 @@ class TickguardTest {
             """"orderedAt":"2026-06-23T09:30:00.000+09:00","canceledAt":null,"execution":{"filledQuantity":"1",""" +
             """"averageFilledPrice":"100","filledAmount":"100","commission":"0.1","tax":"0",""" +
             """"settlementDate":null}}}}"""
+
+    /** The date of the last closed US session the fake calendar reports. */
+    @Volatile private var previousSession = LocalDate.now(SEOUL).minusDays(1)
 
     /** The account's holdings as the fake answers them. */
     @Volatile private var heldJson =
@@ -531,6 +538,46 @@ class TickguardTest {
                 eventually { alerts.any { "자동 주문 중지" in it && "장부에 없는 주문" in it } }
                 withContext(engine.coroutineContext) { app.sleeves.execute() }
 
+                assertThat(orderPosts).isEmpty()
+                withContext(engine.coroutineContext) { app.stop() }
+            }
+        }
+
+    @Test
+    fun `places nothing for the dip sleeve while its bars end a session before the calendar's last`() =
+        runTest {
+            withContext(Dispatchers.Default) {
+                // The bars end yesterday, but the calendar says today's session has already closed.
+                previousSession = LocalDate.now(SEOUL)
+                server.dispatcher = FakeToss()
+                server.start()
+                val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
+                seedCoreBars(store)
+                val app =
+                    app(
+                        server.url("/").toString().trimEnd('/'),
+                        CopyOnWriteArrayList(),
+                        mapOf("TICKGUARD_TRADING" to "on", "TICKGUARD_SLEEVE_D" to "LIVE"),
+                        store,
+                    )
+
+                engine.launch { app.start() }
+                eventually { app.startup == "ready" }
+                withContext(engine.coroutineContext) {
+                    val failure =
+                        try {
+                            app.sleeves.propose(force = true)
+                            null
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (expected: IllegalStateException) {
+                            expected
+                        }
+                    assertThat(failure).hasMessageContaining("the last US session was")
+                    app.sleeves.execute()
+                }
+
+                assertThat(app.sleeves.proposals).isEmpty()
                 assertThat(orderPosts).isEmpty()
                 withContext(engine.coroutineContext) { app.stop() }
             }

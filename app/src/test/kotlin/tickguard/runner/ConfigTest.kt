@@ -32,6 +32,24 @@ class ConfigTest {
     }
 
     @Test
+    fun `journals placements beside the database, and refuses to trade on Postgres without a persistent place`() {
+        val pg =
+            arrayOf(
+                "TICKGUARD_PG_URL" to "jdbc:postgresql://db/tickguard",
+                "TICKGUARD_PG_USER" to "u",
+                "TICKGUARD_PG_PASSWORD" to "p",
+            )
+
+        assertThat(load("TICKGUARD_DB" to "/data/tickguard.db").placements).isEqualTo("/data/placements")
+        assertThat(
+            load("TICKGUARD_PLACEMENTS" to " ", "TICKGUARD_DB" to "/data/tickguard.db").placements,
+        ).isEqualTo("/data/placements")
+        assertThatThrownBy { load(*pg, "TICKGUARD_TRADING" to "on") }.isInstanceOf(ConfigError::class.java)
+        assertThat(load(*pg, "TICKGUARD_TRADING" to "on", "TICKGUARD_PLACEMENTS" to "/data/placements").placements)
+            .isEqualTo("/data/placements")
+    }
+
+    @Test
     fun `reads the escalation step as a ratio, rejecting a percent`() {
         assertThat(load("TICKGUARD_DRAWDOWN_ESCALATE" to "0.05").rules.drawdownEscalateEvery).isEqualTo("0.05")
         assertThatThrownBy { load("TICKGUARD_DRAWDOWN_ESCALATE" to "2") }.isInstanceOf(ConfigError::class.java)

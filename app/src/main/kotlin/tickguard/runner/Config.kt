@@ -185,13 +185,7 @@ fun loadConfig(env: (String) -> String?): Config {
         tickRetention = read.integer("TICKGUARD_TICK_RETENTION_DAYS", DEFAULT_RETENTION_DAYS, minimum = 1).days,
         store = storeConfig(read, env),
         metricsPort = read.integer("TICKGUARD_METRICS_PORT", DEFAULT_METRICS_PORT),
-        placements =
-            env("TICKGUARD_PLACEMENTS")?.takeIf { it.isNotBlank() }
-                ?: java.nio.file.Path
-                    .of(env("TICKGUARD_DB") ?: "tickguard.db")
-                    .toAbsolutePath()
-                    .resolveSibling("placements")
-                    .toString(),
+        placements = placements(env),
     )
 }
 
@@ -220,6 +214,26 @@ private fun storeConfig(
         throw ConfigError("TICKGUARD_PG_URL must look like jdbc:postgresql://host:5432/tickguard. Got \"$url\".")
     }
     return StoreConfig.Postgres(url, read.required("TICKGUARD_PG_USER"), read.required("TICKGUARD_PG_PASSWORD"))
+}
+
+/**
+ * Where the placement journal lives: set, or beside the SQLite file. With
+ * Postgres and trading on it must be set or derivable, since the working
+ * directory of a container does not outlive it, and a lost journal entry is
+ * an order whose money would be spent again.
+ */
+private fun placements(env: (String) -> String?): String {
+    val set = env("TICKGUARD_PLACEMENTS")?.takeIf { it.isNotBlank() }
+    val file = env("TICKGUARD_DB")?.takeIf { it.isNotBlank() }
+    val unsafe = !env("TICKGUARD_PG_URL").isNullOrBlank() && env("TICKGUARD_TRADING")?.trim() == "on"
+    if (set == null && file == null && unsafe) {
+        throw ConfigError("TICKGUARD_PLACEMENTS must name a directory on a persistent volume when trading on Postgres.")
+    }
+    return set ?: java.nio.file.Path
+        .of(file ?: "tickguard.db")
+        .toAbsolutePath()
+        .resolveSibling("placements")
+        .toString()
 }
 
 /**

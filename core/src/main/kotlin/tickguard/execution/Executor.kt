@@ -94,8 +94,7 @@ class Executor(
                 // and nothing more goes out, now or after a restart, until a person looks.
                 val why = attempt { orders.tagOrder(outcome.orderId, request.sleeve) }
                 if (why == null) {
-                    attempt { journal.done(request) }
-                    null
+                    cleared(request)
                 } else {
                     "placed as ${outcome.orderId}, sleeve not recorded ($why)" to "sleeve not recorded"
                 }
@@ -103,8 +102,7 @@ class Executor(
 
             is PlaceOutcome.Refused -> {
                 refused += request to outcome
-                attempt { journal.done(request) }
-                null
+                cleared(request)
             }
 
             is PlaceOutcome.Unknown -> {
@@ -117,6 +115,17 @@ class Executor(
     fun halt(reason: String) {
         halted = reason
     }
+
+    /**
+     * Crosses [request] out of the journal. An entry that cannot be removed
+     * would halt the next start for an order that is accounted for, so it
+     * halts now, where the reason is still known.
+     */
+    private suspend fun cleared(request: OrderRequest): Pair<String, String>? =
+        attempt { journal.done(request) }?.let {
+            "accounted for, but its journal entry remains ($it)" to
+                "journal not cleared"
+        }
 
     /** Runs [step]; returns why it failed, or null. */
     @Suppress("TooGenericExceptionCaught") // Whatever failed, the step did not happen.

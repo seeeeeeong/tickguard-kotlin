@@ -12,6 +12,7 @@ import tickguard.execution.Executor
 import tickguard.execution.OrderPlan
 import tickguard.execution.OrderRequest
 import tickguard.execution.inOrderWindow
+import tickguard.execution.lastSession
 import tickguard.execution.orderWindow
 import tickguard.execution.orderWindowEnd
 import tickguard.execution.planOrders
@@ -41,7 +42,6 @@ import java.time.Instant
 import java.time.InstantSource
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.Period
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 
@@ -249,14 +249,18 @@ internal class SleeveDesk(
         }
     }
 
-    /** A dip proposal priced on a close older than [STALE_BARS] is dropped: its signal is about another week. */
-    private fun fresh(
-        proposal: SleeveProposal,
-        today: LocalDate,
-    ): Boolean =
-        (!proposal.asOf.isBefore(today.minus(STALE_BARS))).also {
-            if (!it) log.warn("rebalance: {} skipped, last close {} is stale", proposal.sleeve.id, proposal.asOf)
+    /**
+     * Throws unless [proposal] is priced on the last US session that has
+     * closed, as the calendar has it: bars a session behind would trade on
+     * an old signal, so the proposal fails and is tried again in
+     * [RETRY_AFTER], by when the bars may have caught up.
+     */
+    private suspend fun current(proposal: SleeveProposal) {
+        val session = lastSession(calendar.load(Market.US), clock.instant())
+        check(session != null && !proposal.asOf.isBefore(session)) {
+            "${proposal.sleeve.id}: bars end at ${proposal.asOf}, the last US session was $session"
         }
+    }
 
     /**
      * Why the account contradicts the ledger, or null if it does not: more
@@ -342,10 +346,9 @@ internal class SleeveDesk(
                 if (rules == null) {
                     proposeRebalance(sleeve, position, bars)
                 } else {
-                    proposeDip(sleeve, position, lots(mine), bars, rules)?.takeIf {
-                        fresh(it, today) &&
-                            settled(sleeve, mine)
-                    }
+                    proposeDip(sleeve, position, lots(mine), bars, rules)
+                        ?.also { current(it) }
+                        ?.takeIf { settled(sleeve, mine) }
                 }
             }
         unrecorded(orders, tags, sleeves)?.let { reason ->
@@ -374,8 +377,10 @@ internal class SleeveDesk(
         proposedAt = clock.instant()
         val fx = fetchUsdKrw(rest)
         this.fx = fx
-        report(Signal(RULE_ID, "-", "$today 리밸런싱 제안", made.joinToString("\n\n") { text(it, fx) }, clock.instant()))
-        log.info("rebalance: proposed {} trades across {} sleeves", made.sumOf { it.trades.size }, made.size)
+        // Everything the evening will place, a carried-over month included.
+        val all = proposals
+        report(Signal(RULE_ID, "-", "$today 리밸런싱 제안", all.joinToString("\n\n") { text(it, fx) }, clock.instant()))
+        log.info("rebalance: proposed {} trades across {} sleeves", all.sumOf { it.trades.size }, all.size)
     }
 
     private fun text(
@@ -413,9 +418,6 @@ internal class SleeveDesk(
 
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
-
-        /** Four days covers a weekend and a holiday; an older last close means the bars stopped updating. */
-        val STALE_BARS: Period = Period.ofDays(4)
 
         /** Shares the account and the ledger may differ by: fills are quoted to six places. */
         val SHARE_TOLERANCE: Decimal = Decimal.parse("0.0001", "tolerance")

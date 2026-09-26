@@ -55,4 +55,13 @@ class OrderWindowTest {
             .isEqualTo(Instant.parse("2026-11-02T14:40:00Z")..Instant.parse("2026-11-02T20:00:00Z"))
         assertThat(orderWindow(null)).isNull()
     }
+
+    @Test
+    fun `names the last regular session that has closed, the close a proposal must be priced on`() {
+        assertThat(
+            lastSession(hours, Instant.parse("2026-11-02T21:00:00Z")),
+        ).isEqualTo(java.time.LocalDate.parse("2026-11-02"))
+        assertThat(lastSession(hours, Instant.parse("2026-11-02T20:59:59Z"))).isNull()
+        assertThat(lastSession(null, Instant.parse("2026-11-02T21:00:00Z"))).isNull()
+    }
 }

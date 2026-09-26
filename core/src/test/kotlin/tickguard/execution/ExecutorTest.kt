@@ -125,6 +125,22 @@ class ExecutorTest {
         }
 
     @Test
+    fun `halts when an accounted order's journal entry cannot be removed`() =
+        runTest {
+            val stuck =
+                object : PlacementJournal by NoJournal {
+                    override fun done(request: OrderRequest): Unit = error("read-only")
+                }
+            val executor = Executor({ PlaceOutcome.Placed("o-${it.symbol}") }, tags, stuck)
+
+            val result = executor.run(OrderPlan(listOf(buy("SPY"), buy("QQQ")), emptyList(), emptyList()))
+
+            assertThat(result.placed.map { it.second }).containsExactly("o-SPY")
+            assertThat(result.haltedAt?.second).isEqualTo("journal not cleared")
+            assertThat(executor.halted).contains("read-only")
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

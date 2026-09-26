@@ -81,25 +81,53 @@ class Executor(
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
         var stop: Pair<OrderRequest, String>? = null
         val funding = Funding(plan.cash)
+        // Once switched off, the run is over: switching back on must not send the rest of an old plan.
+        var off = false
         for (request in plan.live) {
             if (halted != null) break
-            if (!stillLive(request)) {
-                refused += request to SWITCHED_OFF
-            } else if (request.side == Side.BUY && !funding.ready(request)) {
-                refused += request to UNFUNDED
+            val held = if (off) SWITCHED_OFF else hold(request, funding, stillLive)
+            off = off || held === SWITCHED_OFF
+            if (held != null) {
+                refused += request to held
             } else {
-                val before = refused.size
-                send(request, placed, refused)?.let { (why, reason) ->
+                sendRecorded(request, placed, refused, funding)?.let { (why, reason) ->
                     halted = "${request.clientOrderId}: $why"
                     stop = request to reason
-                }
-                if (request.side == Side.SELL) {
-                    val id = placed.lastOrNull()?.takeIf { it.first == request }?.second
-                    funding.sold(request.sleeve, id, refused = refused.size > before)
                 }
             }
         }
         return ExecutionResult(placed, refused, stop)
+    }
+
+    /** Sends [request], and records a sale's outcome for the buys it funds. Returns why the run must halt, or null. */
+    private suspend fun sendRecorded(
+        request: OrderRequest,
+        placed: MutableList<Pair<OrderRequest, String>>,
+        refused: MutableList<Pair<OrderRequest, PlaceOutcome.Refused>>,
+        funding: Funding,
+    ): Pair<String, String>? {
+        val before = refused.size
+        val halt = send(request, placed, refused)
+        if (request.side == Side.SELL) funding.sold(request, placed, refused = refused.size > before)
+        return halt
+    }
+
+    /**
+     * Why [request] must not go out now, or null. A buy may wait on its
+     * sales' fills, so whether it is still live is asked again after the wait.
+     */
+    private suspend fun hold(
+        request: OrderRequest,
+        funding: Funding,
+        stillLive: (OrderRequest) -> Boolean,
+    ): PlaceOutcome.Refused? {
+        if (!stillLive(request)) return SWITCHED_OFF
+        val funded = request.side != Side.BUY || funding.ready(request)
+        return when {
+            !stillLive(request) -> SWITCHED_OFF
+            !funded -> UNFUNDED
+            else -> null
+        }
     }
 
     /**
@@ -117,14 +145,16 @@ class Executor(
         /** What a sleeve that sold may still spend: its cash and its sales' proceeds, less its buys so far. */
         private val budget = LinkedHashMap<String, Decimal>()
 
+        /** Records [sale]'s outcome: its order, if the last placed was it, or an unfunded sleeve. */
         fun sold(
-            sleeve: String,
-            orderId: String?,
+            sale: OrderRequest,
+            placed: List<Pair<OrderRequest, String>>,
             refused: Boolean,
         ) {
+            val orderId = placed.lastOrNull()?.takeIf { it.first == sale }?.second
             when {
-                refused || orderId == null -> unfunded += sleeve
-                else -> sales.getOrPut(sleeve) { ArrayList() } += orderId
+                refused || orderId == null -> unfunded += sale.sleeve
+                else -> sales.getOrPut(sale.sleeve) { ArrayList() } += orderId
             }
         }
 

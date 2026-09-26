@@ -174,14 +174,16 @@ internal class SleeveDesk(
     fun stop() {
         synchronized(switching) {
             // Orders stop first, in memory, whatever happens to the file after.
+            val wasDaily = arming.daily.isNotEmpty()
             arming = Arming(stopped = true)
             try {
                 // Stop means stop: a daily switch left on would start trading again at the next restart.
                 daily.save(emptySet())
+                if (wasDaily) announceSwitch("매일 자동 주문 꺼짐", "긴급 중지로 매일 자동 주문도 꺼졌습니다.")
                 log.warn("control: trading stopped until restart, daily orders switched off")
             } catch (failure: Exception) {
-                val message = "긴급 중지는 됐지만 매일 자동 주문 파일을 지우지 못함: ${failure.message} — 재시작 전에 data/daily-live 를 지우세요"
-                scope.launch { report(Signal(EXECUTION_ID, "-", "자동 주문 중지", message, clock.instant())) }
+                val message = "긴급 중지는 됐지만 매일 자동 주문 파일을 지우지 못함: ${failure.message} — 재시작 전에 ${daily.location} 를 지우세요"
+                announceSwitch("자동 주문 중지", message)
                 log.error("control: trading stopped, but the daily switch file remains: {}", failure.message)
             }
         }
@@ -219,8 +221,23 @@ internal class SleeveDesk(
                 }
                 reason
             }
-        if (refusal == null) log.warn("control: daily live orders on for {}", sleeves)
+        if (refusal == null) {
+            log.warn("control: daily live orders on for {}", sleeves)
+            replaceDryRun()
+        }
         return refusal
+    }
+
+    /**
+     * Places the current proposal live if it has only been listed so far:
+     * switching daily orders on during tonight's window means tonight.
+     */
+    private fun replaceDryRun() {
+        val made = proposedAt
+        if (made != null && liveFor != made && Duration.between(made, clock.instant()) <= STALE_AFTER) {
+            executedFor = null
+            scope.launch { execute() }
+        }
     }
 
     /** Saves the switch, then turns it on in memory; a switch that could not be saved stays off. */
@@ -246,7 +263,7 @@ internal class SleeveDesk(
                     "이제 [구매하기]를 눌러야 주문이 나갑니다."
                 } catch (failure: Exception) {
                     log.error("control: daily orders off, but the switch file remains: {}", failure.message)
-                    "지금은 꺼졌지만 스위치 파일을 지우지 못함(${failure.message}) — 재시작 전에 지우세요."
+                    "지금은 꺼졌지만 스위치 파일을 지우지 못함(${failure.message}) — 재시작 전에 ${daily.location} 를 지우세요."
                 }
             announceSwitch("매일 자동 주문 꺼짐", text)
         }

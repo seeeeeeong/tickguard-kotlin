@@ -230,6 +230,36 @@ class ExecutorTest {
         }
 
     @Test
+    fun `ends the run at the first switch off, even if switched back on, and asks again after waiting on a sale`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val sell = OrderRequest("tg-20261102-D-S-SPY", "D", "SPY", Side.SELL, null, decimal("0.2"))
+            val dipBuy = OrderRequest("tg-20261102-D-B-AAPL", "D", "AAPL", Side.BUY, decimal("100"), null)
+            val answers = ArrayDeque(listOf(true, true, false, true, true))
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    PlaceOutcome.Placed("o-${it.symbol}")
+                }, tags, NoJournal) { decimal("200") }
+
+            // Live for the sale, then switched off while the buy waited on its fill, then on again.
+            val result =
+                executor.run(
+                    OrderPlan(
+                        listOf(sell, dipBuy, buy("QQQ")),
+                        emptyList(),
+                        emptyList(),
+                        mapOf("D" to decimal("0")),
+                    ),
+                ) {
+                    answers.removeFirstOrNull() ?: true
+                }
+
+            assertThat(sent).containsExactly("SPY")
+            assertThat(result.refused.map { it.first.symbol }).containsExactly("AAPL", "QQQ")
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

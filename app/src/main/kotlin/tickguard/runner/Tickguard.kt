@@ -312,7 +312,13 @@ class Tickguard(
             Executor(placer, store, PlacementFiles(config.placements)),
             calendar,
             engine,
-            refresh = { check(tasks.refreshBars().unreadable.isEmpty()) { "bars came back unreadable" } },
+            refresh = {
+                tasks
+                    .refreshBars()
+                    .unreadable
+                    .map { it.substringBefore(" ") }
+                    .toSet()
+            },
             account = { holdings.refresh().positions.mapValues { it.value.quantity } },
         )
 

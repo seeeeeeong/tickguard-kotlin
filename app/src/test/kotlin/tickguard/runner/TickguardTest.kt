@@ -29,6 +29,7 @@ import tickguard.store.sqlite.SqliteStore
 import tickguard.stream.Decimal
 import tickguard.time.SEOUL
 import tickguard.trading.Bar
+import tickguard.trading.TestSleeves
 import java.nio.file.Files
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -356,6 +357,27 @@ class TickguardTest {
             }
         }
 
+    /** The dip sleeve's candidates, flat at 100 for 210 days to yesterday: enough history, and no dip. */
+    private suspend fun seedDipBars(store: SqliteStore) {
+        val yesterday = LocalDate.now(SEOUL).minusDays(1)
+        val dip = TestSleeves.ALL.single { it.dip != null }
+        store.recordBars(
+            dip.universe.filter { it != "SPY" }.flatMap { code ->
+                (0L until 210L).map { back ->
+                    Bar(
+                        code,
+                        yesterday.minusDays(back),
+                        Decimal.HUNDRED,
+                        Decimal.HUNDRED,
+                        Decimal.HUNDRED,
+                        Decimal.HUNDRED,
+                        Decimal.ONE,
+                    )
+                }
+            },
+        )
+    }
+
     /** Sleeve A's five ETFs, flat at 100 for the last three days: its opening proposal buys each for a fifth. */
     private suspend fun seedCoreBars(store: SqliteStore) {
         val yesterday = LocalDate.now(SEOUL).minusDays(1)
@@ -456,6 +478,7 @@ class TickguardTest {
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
                 seedCoreBars(store)
+                seedDipBars(store)
                 val alerts = CopyOnWriteArrayList<String>()
                 val app =
                     app(
@@ -492,6 +515,7 @@ class TickguardTest {
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
                 seedCoreBars(store)
+                seedDipBars(store)
                 val alerts = CopyOnWriteArrayList<String>()
                 val app =
                     app(
@@ -521,6 +545,7 @@ class TickguardTest {
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
                 seedCoreBars(store)
+                seedDipBars(store)
                 // Accepted and tagged, then the process died before the fill was recorded.
                 store.tagOrder("lost-order", "D")
                 val alerts = CopyOnWriteArrayList<String>()
@@ -553,6 +578,7 @@ class TickguardTest {
                 server.start()
                 val store = SqliteStore.open(Files.createTempDirectory("tickguard-").resolve("app.db").toString())
                 seedCoreBars(store)
+                seedDipBars(store)
                 val app =
                     app(
                         server.url("/").toString().trimEnd('/'),

@@ -141,6 +141,36 @@ class ExecutorTest {
         }
 
     @Test
+    fun `sends none of a sleeve's buys once one of its sales is refused`() =
+        runTest {
+            val sent = mutableListOf<String>()
+            val sell = OrderRequest("tg-20261102-D-S-SPY", "D", "SPY", Side.SELL, null, decimal("0.2"))
+            val otherSleeve = OrderRequest("tg-20261102-A-B-GLD", "A", "GLD", Side.BUY, decimal("10"), null)
+            val dipBuy = OrderRequest("tg-20261102-D-B-AAPL", "D", "AAPL", Side.BUY, decimal("100"), null)
+            val executor =
+                Executor({
+                    sent += it.symbol
+                    if (it.side ==
+                        Side.SELL
+                    ) {
+                        PlaceOutcome.Refused(422, "insufficient-quantity", "no")
+                    } else {
+                        PlaceOutcome.Placed("o")
+                    }
+                }, tags)
+
+            val result = executor.run(OrderPlan(listOf(sell, otherSleeve, dipBuy), emptyList(), emptyList()))
+
+            assertThat(sent).containsExactly("SPY", "GLD")
+            assertThat(
+                result.refused.map {
+                    it.first.symbol to it.second.code
+                },
+            ).containsExactly("SPY" to "insufficient-quantity", "AAPL" to "not-sent")
+            assertThat(executor.halted).isNull()
+        }
+
+    @Test
     fun `never sends a dry run's orders`() =
         runTest {
             val sent = mutableListOf<String>()

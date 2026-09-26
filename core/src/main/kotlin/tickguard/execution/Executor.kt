@@ -2,6 +2,7 @@ package tickguard.execution
 
 import kotlinx.coroutines.CancellationException
 import tickguard.orders.OrderStore
+import tickguard.trading.Side
 
 /** What the broker said to one order. */
 sealed interface PlaceOutcome {
@@ -64,11 +65,20 @@ class Executor(
         val placed = ArrayList<Pair<OrderRequest, String>>()
         val refused = ArrayList<Pair<OrderRequest, PlaceOutcome.Refused>>()
         var stop: Pair<OrderRequest, String>? = null
+        // A sleeve's buys are sized on its sales' proceeds: once one of its sales is refused, its buys
+        // would spend money the sleeve does not have, which may be the account's other cash.
+        val unfunded = LinkedHashSet<String>()
         for (request in plan.live) {
             if (halted != null) break
-            send(request, placed, refused)?.let { (why, reason) ->
-                halted = "${request.clientOrderId}: $why"
-                stop = request to reason
+            if (request.side == Side.BUY && request.sleeve in unfunded) {
+                refused += request to UNFUNDED
+            } else {
+                val before = refused.size
+                send(request, placed, refused)?.let { (why, reason) ->
+                    halted = "${request.clientOrderId}: $why"
+                    stop = request to reason
+                }
+                if (request.side == Side.SELL && refused.size > before) unfunded += request.sleeve
             }
         }
         return ExecutionResult(placed, refused, stop)
@@ -139,3 +149,6 @@ class Executor(
             failure.message ?: failure.javaClass.simpleName
         }
 }
+
+/** Why a buy was not sent: its sleeve's sale was refused, so the money it was sized on never came. */
+private val UNFUNDED = PlaceOutcome.Refused(0, "not-sent", "a sale of its sleeve was refused")

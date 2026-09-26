@@ -1,5 +1,6 @@
 package tickguard.runner
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
@@ -25,6 +26,8 @@ import tickguard.sla.Market
 import tickguard.store.Store
 import tickguard.stream.Decimal
 import tickguard.time.SEOUL
+import tickguard.trading.Bar
+import tickguard.trading.DipRules
 import tickguard.trading.LossAction
 import tickguard.trading.Sleeve
 import tickguard.trading.SleeveMode
@@ -62,8 +65,8 @@ internal class SleeveDesk(
     private val calendar: Calendar,
     /** The engine: proposals and orders run where the rest of the domain state does. */
     private val scope: CoroutineScope,
-    /** Fetches the latest daily bars, throwing if any are unreadable: a proposal must not price on an old close. */
-    private val refresh: suspend () -> Unit = {},
+    /** Fetches the latest daily bars; returns the symbols with rows it could not read. */
+    private val refresh: suspend () -> Set<String> = { emptySet() },
     /** The account's shares by symbol, fresh: what the ledger is checked against before a dip sleeve trades. */
     private val account: suspend () -> Map<String, Decimal> = { emptyMap() },
 ) {
@@ -250,16 +253,32 @@ internal class SleeveDesk(
     }
 
     /**
-     * Throws unless [proposal] is priced on the last US session that has
-     * closed, as the calendar has it: bars a session behind would trade on
+     * Throws unless [proposal] is priced on exactly the last US session that
+     * has closed, as the calendar has it: bars a session behind would trade on
      * an old signal, so the proposal fails and is tried again in
      * [RETRY_AFTER], by when the bars may have caught up.
      */
-    private suspend fun current(proposal: SleeveProposal) {
-        val session = lastSession(calendar.load(Market.US), clock.instant())
-        check(session != null && !proposal.asOf.isBefore(session)) {
+    private fun current(
+        proposal: SleeveProposal,
+        session: LocalDate?,
+    ) {
+        check(session != null && proposal.asOf == session) {
             "${proposal.sleeve.id}: bars end at ${proposal.asOf}, the last US session was $session"
         }
+    }
+
+    /**
+     * Throws unless every symbol the dip sleeve may buy has the history its
+     * signal needs: a symbol without it can never signal, and a sleeve that
+     * silently cannot enter is not the strategy that was backtested.
+     */
+    private fun complete(
+        sleeve: Sleeve,
+        rules: DipRules,
+        bars: Map<String, List<Bar>>,
+    ) {
+        val short = sleeve.universe.filter { it != rules.parking && (bars[it]?.size ?: 0) <= rules.trendDays }
+        check(short.isEmpty()) { "${sleeve.id}: under ${rules.trendDays + 1} daily bars for ${short.joinToString()}" }
     }
 
     /**
@@ -298,17 +317,21 @@ internal class SleeveDesk(
      * weekday without one proposes now, at most every [RETRY_AFTER] while it
      * keeps failing (a bar fetch that fails must not be retried every minute).
      */
+    @Suppress("TooGenericExceptionCaught") // A failed catch-up must not stop tonight's run of an earlier proposal.
     private suspend fun catchUp() {
         val now = clock.instant()
         val today = LocalDate.ofInstant(now, SEOUL)
         val madeToday = proposedAt?.let { LocalDate.ofInstant(it, SEOUL) } == today
-        val waiting = attemptedAt?.let { Duration.between(it, now) < RETRY_AFTER } == true
         val early = LocalTime.ofInstant(now, SEOUL) < PROPOSE_AT
-        val settled = madeToday || waiting || early
-        if (!settled && due(today, force = false).isNotEmpty()) propose()
+        if (madeToday || early || due(today, force = false).isEmpty()) return
+        try {
+            propose()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            log.warn("rebalance: catch-up failed, retrying in {}: {}", RETRY_AFTER, failure.message)
+        }
     }
-
-    @Volatile private var attemptedAt: Instant? = null
 
     /** The sleeves that propose on [today]: a dip sleeve every weekday, the rest on a rebalance day; never one off. */
     private fun due(
@@ -320,13 +343,45 @@ internal class SleeveDesk(
         on && (force || day)
     }
 
-    /** On a sleeve's day, or when [force]d: works out and sends the proposal of every sleeve that is on. */
+    /**
+     * On a sleeve's day, or when [force]d: works out and sends the proposal of
+     * every sleeve that is on. A failure is thrown, and the scheduled callers
+     * wait [RETRY_AFTER] before the next try rather than refetching every
+     * symbol each minute; a person's request always tries.
+     */
+    @Suppress("TooGenericExceptionCaught") // Any failure starts the wait, and is rethrown.
     suspend fun propose(force: Boolean = false) {
-        val today = LocalDate.now(clock.withZone(SEOUL))
+        val now = clock.instant()
+        val today = LocalDate.ofInstant(now, SEOUL)
         val sleeves = due(today, force)
-        if (sleeves.isEmpty()) return
-        attemptedAt = clock.instant()
-        refresh()
+        val waiting = failedAt?.let { Duration.between(it, now) < RETRY_AFTER } == true
+        if (sleeves.isEmpty() || (waiting && !force)) return
+        try {
+            proposeNow(today, sleeves, force)
+            failedAt = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            failedAt = now
+            throw failure
+        }
+    }
+
+    @Volatile private var failedAt: Instant? = null
+
+    @Suppress("LongMethod") // The proposal's steps, each a line or two.
+    private suspend fun proposeNow(
+        today: LocalDate,
+        sleeves: List<Sleeve>,
+        force: Boolean,
+    ) {
+        val unreadable = refresh()
+        val broken = sleeves.flatMap { it.universe }.distinct().filter { it in unreadable }
+        check(broken.isEmpty()) { "bars unreadable for ${broken.joinToString()}" }
+        // Up to the last session that has closed: after midnight in Seoul the store also holds
+        // the open session's partial bar, which no proposal may price on.
+        val session = lastSession(calendar.load(Market.US), clock.instant())
+        val through = session ?: today.minusDays(1)
         val orders = store.ordersSince(TestSleeves.START)
         val tags = store.orderTags()
         val owned = attribute(orders, TestSleeves.ALL, tags, TestSleeves.PERSONAL, TestSleeves.START)
@@ -337,7 +392,7 @@ internal class SleeveDesk(
                         store.bars(
                             it,
                             today.minusYears(HISTORY_YEARS),
-                            today.minusDays(1),
+                            through,
                         )
                     }
                 val mine = owned[sleeve.id].orEmpty()
@@ -346,8 +401,9 @@ internal class SleeveDesk(
                 if (rules == null) {
                     proposeRebalance(sleeve, position, bars)
                 } else {
+                    complete(sleeve, rules, bars)
                     proposeDip(sleeve, position, lots(mine), bars, rules)
-                        ?.also { current(it) }
+                        ?.also { current(it, session) }
                         ?.takeIf { settled(sleeve, mine) }
                 }
             }

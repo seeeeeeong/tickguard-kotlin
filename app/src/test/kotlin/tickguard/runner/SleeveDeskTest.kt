@@ -49,4 +49,24 @@ class SleeveDeskTest {
         // AAPL doubled: a split the ledger predates, or an order no sleeve recorded.
         assertThat(mismatched(account, ledger, listOf("AAPL", "SPY", "AMZN"), setOf("AMZN"))).containsExactly("AAPL")
     }
+
+    @Test
+    fun `raises the run's buy limit to the dip sleeve's capital only while it is on`() {
+        val dip = limitsFor(mapOf("D" to tickguard.trading.SleeveMode.DRY_RUN)).maxBuys
+        val test =
+            limitsFor(
+                mapOf("A" to tickguard.trading.SleeveMode.LIVE, "D" to tickguard.trading.SleeveMode.OFF),
+            ).maxBuys
+
+        assertThat(dip).isEqualTo(TestSleeves.DIP_CAPITAL)
+        assertThat(test.format(2)).isEqualTo("219.20")
+    }
+
+    @Test
+    fun `names the replaced sleeves that still hold shares`() {
+        val filled =
+            tickguard.testing.order("a1", status = "FILLED", symbol = "SPY", price = null)
+        assertThat(leftovers(TestSleeves.ALL, mapOf("A" to listOf(filled)))).containsExactly("A")
+        assertThat(leftovers(TestSleeves.ALL, mapOf("D" to listOf(filled)))).isEmpty()
+    }
 }

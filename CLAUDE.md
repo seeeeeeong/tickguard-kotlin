@@ -40,7 +40,7 @@ not a suggestion; the architecture tests enforce what they can.
 | Every order carries `clientOrderId` derived from sleeve, date, symbol and side | The key makes a retried request return the first result instead of a second order (valid 10 minutes) |
 | An order whose outcome is unknown halts all automated orders and alerts | An unknown outcome may be a filled order; placing more on top of it is how a bug compounds |
 | Sleeve loss limits: A −25% stops buying, B −20% stops buying, C −30% stops the sleeve for good | Decided before the test, not during a drawdown |
-| Sleeve D (dip, set by the user 2026-09-25): capital $733.98 fixed in code, proposes every weekday at 09:00 KST, sells at +8% / −20% from its average cost, averages down once at −8%, 3 positions, idle money in SPY, never GOOGL. The run's buy limit is its capital | The user chose a dip strategy over the three-sleeve test; the backtest matched holding the S&P 500, and the capital is what the user put in |
+| Sleeve D (dip, set by the user 2026-09-25): capital $733.98 fixed in code, proposes every weekday at 09:00 KST, sells at +8% / −20% from its average cost, averages down once at −8%, 3 positions, idle money in SPY, never the user's own symbols (AMZN, GOOGL, SPCX). The run's buy limit is its capital while it is on, and it runs only with A, B and C off and empty | The user chose a dip strategy over the three-sleeve test; the backtest matched holding the S&P 500, and the capital is what the user put in |
 
 ## Hard constraints of the Toss Securities API
 

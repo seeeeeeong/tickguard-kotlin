@@ -319,7 +319,13 @@ class Tickguard(
                     .map { it.substringBefore(" ") }
                     .toSet()
             },
-            account = { holdings.refresh().positions.mapValues { it.value.quantity } },
+            account = {
+                // A failed or unconfirmed refresh returns the last snapshot; only a fresh one is the account now.
+                val asked = clock.instant()
+                val snapshot = holdings.refresh()
+                check(!snapshot.fetchedAt.isBefore(asked)) { "holdings did not refresh" }
+                snapshot.positions.mapValues { it.value.quantity }
+            },
         )
 
     private var loggedRecordFailure = false

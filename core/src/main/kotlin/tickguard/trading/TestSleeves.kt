@@ -55,11 +55,12 @@ object TestSleeves {
     val DIP_CAPITAL: Decimal = Decimal.parse("733.98", "dip capital")
 
     /**
-     * The momentum sleeve's large caps without GOOGL, which the user keeps
-     * and this must never trade, and without SPCX, too young for a 200-day
-     * average. SPY is where the sleeve's idle money waits.
+     * The momentum sleeve's large caps without the user's own holdings
+     * (AMZN, GOOGL, SPCX): the account holds those beside any sleeve, so a
+     * sleeve's shares of them could not be checked against the account's.
+     * SPY is where the sleeve's idle money waits.
      */
-    private val DIP_SYMBOLS = MOMENTUM - "GOOGL" - "SPCX"
+    private val DIP_SYMBOLS = MOMENTUM - PERSONAL
 
     private fun won(amount: Long) = Decimal.of(amount) / FX
 

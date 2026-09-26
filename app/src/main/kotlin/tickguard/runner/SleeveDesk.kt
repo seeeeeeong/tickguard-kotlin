@@ -185,7 +185,13 @@ internal class SleeveDesk(
         val due = arming.enabled(trading.enabled) && executedFor != made && Duration.between(made, now) <= STALE_AFTER
         if (!due || !inOrderWindow(calendar.hours(Market.US), now)) return
         executedFor = made
-        val plan = planOrders(proposals, arming.modes(trading.modes, now), LIMITS, LocalDate.ofInstant(made, SEOUL))
+        val plan =
+            planOrders(
+                proposals,
+                arming.modes(trading.modes, now),
+                limitsFor(trading.modes),
+                LocalDate.ofInstant(made, SEOUL),
+            )
         val result = executor.run(plan)
         lastRun = LastRun(now, plan, result)
         report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
@@ -417,6 +423,10 @@ internal class SleeveDesk(
                     proposeRebalance(sleeve, position, bars)
                 } else {
                     complete(sleeve, rules, bars)
+                    val left = leftovers(TestSleeves.ALL, owned)
+                    check(
+                        left.isEmpty(),
+                    ) { "${sleeve.id}: ${left.joinToString()} still hold shares; clear them before it trades" }
                     // No proposal means the parking symbol has no current close: fail and retry rather than
                     // lose the day's exits.
                     val proposal =
@@ -512,14 +522,6 @@ internal class SleeveDesk(
 
         /** A proposal older than this is not placed: the next session's prices are another month's question. */
         val STALE_AFTER: Duration = PROPOSAL_LIFETIME
-
-        /**
-         * The hard limits, in code so configuration cannot raise them: all buys
-         * in one run within the dip sleeve's capital, which the user set on
-         * 2026-09-25 in place of the three-sleeve test's 300,000 won, and no
-         * more orders than a full rebalance could need.
-         */
-        val LIMITS = ExecutionLimits(maxBuys = TestSleeves.DIP_CAPITAL, maxOrdersPerRun = 20)
     }
 }
 
@@ -561,6 +563,39 @@ internal fun mismatched(
 
 /** Shares the account and the ledger may differ by: fills are quoted to six places. */
 private val SHARE_TOLERANCE: Decimal = Decimal.parse("0.0001", "tolerance")
+
+/**
+ * The hard limits, in code so configuration cannot raise them: every buy in
+ * one run within the dip sleeve's capital while it is on, which the user set
+ * on 2026-09-25 in place of the three-sleeve test, and within that test's
+ * 300,000 won otherwise; no more orders than a full rebalance could need.
+ */
+internal fun limitsFor(modes: Map<String, SleeveMode>): ExecutionLimits {
+    val dip = TestSleeves.ALL.any { it.dip != null && (modes[it.id] ?: SleeveMode.OFF) != SleeveMode.OFF }
+    val maxBuys = if (dip) TestSleeves.DIP_CAPITAL else Decimal.of(TEST_WON) / TestSleeves.FX
+    return ExecutionLimits(maxBuys = maxBuys, maxOrdersPerRun = MAX_ORDERS)
+}
+
+/** The three-sleeve test's capital in won. */
+private const val TEST_WON = 300_000L
+
+/** More orders than any sleeve's full rebalance could need. */
+private const val MAX_ORDERS = 20
+
+/**
+ * The sleeves other than the dip sleeves that still hold shares by their
+ * ledgers. The dip sleeve replaced them in the same account and starts from
+ * its whole capital in cash, so their shares must be sold or moved first, or
+ * the same dollars would be counted twice.
+ */
+internal fun leftovers(
+    sleeves: List<Sleeve>,
+    owned: Map<String, List<Order>>,
+): List<String> =
+    sleeves
+        .filter {
+            it.dip == null && position(it, owned[it.id].orEmpty()).holdings.isNotEmpty()
+        }.map { it.id }
 
 /** A run of the plan, placed or listed, for the control page. */
 internal data class LastRun(

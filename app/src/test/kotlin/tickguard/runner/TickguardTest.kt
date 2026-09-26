@@ -470,6 +470,8 @@ class TickguardTest {
                 eventually { alerts.any { "리밸런싱 실행" in it && "✔ A BUY SPY" in it } }
                 assertThat(orderPosts).hasSize(5)
                 assertThat(app.sleeves.describe()).contains("A:LIVE").contains("LIVE until")
+                // The same proposal never goes out twice, whatever the client order ids' ten minutes.
+                assertThat(app.sleeves.goLive()).isEqualTo("already placed")
 
                 app.sleeves.stop()
                 assertThat(app.sleeves.goLive()).isEqualTo("trading is off")

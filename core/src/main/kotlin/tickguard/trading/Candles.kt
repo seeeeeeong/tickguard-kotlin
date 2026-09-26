@@ -134,20 +134,20 @@ suspend fun refreshBars(
 ): RefreshedBars {
     var written = 0
     val unreadable = ArrayList<String>()
-    val latest = LinkedHashMap<String, LocalDate>()
+    val days = LinkedHashMap<String, Set<LocalDate>>()
     for (code in codes) {
-        val fetched = fetchDailyBars(rest, code, from)
-        store.recordBars(fetched.bars)
-        written += fetched.bars.size
-        unreadable += fetched.unreadable
-        fetched.bars.maxOfOrNull { it.day }?.let { latest[code] = it }
+        val result = fetchDailyBars(rest, code, from)
+        store.recordBars(result.bars)
+        written += result.bars.size
+        unreadable += result.unreadable
+        days[code] = result.bars.map { it.day }.toSet()
     }
-    return RefreshedBars(written, unreadable, latest)
+    return RefreshedBars(written, unreadable, days)
 }
 
 data class RefreshedBars(
     val written: Int,
     val unreadable: List<String>,
-    /** Each symbol's newest bar in this fetch: what the API had, not what the store already held. */
-    val latest: Map<String, LocalDate> = emptyMap(),
+    /** The days each symbol's fetch returned: what the API had, not what the store already held. */
+    val fetched: Map<String, Set<LocalDate>> = emptyMap(),
 )

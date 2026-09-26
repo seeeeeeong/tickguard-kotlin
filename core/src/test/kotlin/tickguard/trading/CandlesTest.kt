@@ -96,13 +96,13 @@ class CandlesTest {
             val refreshed = refreshBars(rest, store, listOf("A", "B"), LocalDate.parse("2026-03-20"))
             refreshBars(rest, store, listOf("A"), LocalDate.parse("2026-03-20"))
 
-            val newest = LocalDate.parse("2026-03-25")
+            val days = setOf(LocalDate.parse("2026-03-25"), LocalDate.parse("2026-03-24"))
             assertThat(refreshed).isEqualTo(
                 RefreshedBars(
                     written = 4,
                     unreadable = emptyList(),
-                    latest =
-                        mapOf("A" to newest, "B" to newest),
+                    fetched =
+                        mapOf("A" to days, "B" to days),
                 ),
             )
             assertThat(

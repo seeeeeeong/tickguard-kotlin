@@ -12,7 +12,6 @@ import tickguard.execution.ExecutionResult
 import tickguard.execution.Executor
 import tickguard.execution.OrderPlan
 import tickguard.execution.OrderRequest
-import tickguard.execution.firstSession
 import tickguard.execution.inOrderWindow
 import tickguard.execution.lastSession
 import tickguard.execution.orderWindow
@@ -119,21 +118,33 @@ internal class SleeveDesk(
     fun goLive(): String? {
         val now = clock.instant()
         val until = orderWindowEnd(calendar.hours(Market.US), now)
+        val made = proposedAt
         val refusal =
             when {
                 !arming.enabled(trading.enabled) -> "trading is off"
                 executor.halted != null -> "halted"
                 until == null -> "outside the order window"
                 SleeveMode.DRY_RUN !in trading.modes.values -> "no sleeve in DRY_RUN"
+                made != null && liveFor == made -> "already placed"
                 else -> null
             }
         if (refusal == null) {
             arming = arming.copy(liveUntil = until)
             log.warn("control: DRY_RUN sleeves live until {}", until)
-            requestNow()
+            // The morning's proposal, checked against the session that closed before it, is what
+            // was listed and what goes out; proposing again after midnight would price on a guess.
+            if (made != null && Duration.between(made, now) <= STALE_AFTER) {
+                executedFor = null
+                scope.launch { execute() }
+            } else {
+                requestNow()
+            }
         }
         return refusal
     }
+
+    /** The proposal whose orders went out live: it is never placed a second time. */
+    @Volatile private var liveFor: Instant? = null
 
     /** The control page's stop: no order of any kind until the process restarts. */
     fun stop() {
@@ -197,6 +208,7 @@ internal class SleeveDesk(
                 LocalDate.ofInstant(made, SEOUL),
             )
         if (verified(plan)) {
+            if (plan.live.isNotEmpty()) liveFor = made
             val result = executor.run(plan)
             lastRun = LastRun(now, plan, result)
             report(Signal(EXECUTION_ID, "-", "리밸런싱 실행", summary(plan, result), now))
@@ -266,20 +278,12 @@ internal class SleeveDesk(
     }
 
     /**
-     * The last US session that has closed. The calendar names it until
-     * midnight in Seoul; after that it lists only the session still running
-     * and the next, and the last closed session is the last stored close
-     * before the running one's date.
+     * The last US session that has closed, as the calendar names it. After
+     * midnight in Seoul it lists only the session still running and the next,
+     * so there is none, and a dip proposal made then fails rather than guess:
+     * LIVE places the morning's proposal instead of proposing again.
      */
-    private suspend fun closedSession(): LocalDate? {
-        val hours = calendar.load(Market.US)
-        return lastSession(hours, clock.instant())
-            ?: firstSession(hours)?.let { running ->
-                store
-                    .bars(TestSleeves.PARKING, running.minusDays(LOOKBACK_DAYS), running.minusDays(1))
-                    .maxOfOrNull { it.day }
-            }
-    }
+    private suspend fun closedSession(): LocalDate? = lastSession(calendar.load(Market.US), clock.instant())
 
     /**
      * Throws unless [proposal] is priced on exactly the last US session that
@@ -482,7 +486,10 @@ internal class SleeveDesk(
                     check(left.isEmpty()) { "${sleeve.id}: ${left.joinToString()} still hold shares or open orders" }
                     // Only a close this fetch returned is known to be final: a row the store kept may be a
                     // bar stored while its session was still trading.
-                    val stale = sleeve.universe.filter { refreshed.latest[it] != session }
+                    val stale =
+                        sleeve.universe.filter {
+                            session == null || session !in refreshed.fetched[it].orEmpty()
+                        }
                     val needed = stale.filter { it == rules.parking || (position.holdings[it]?.signum() ?: 0) > 0 }
                     check(needed.isEmpty()) {
                         "${sleeve.id}: ${needed.joinToString()} not refreshed through the last US session, $session"
@@ -567,9 +574,6 @@ internal class SleeveDesk(
 
         /** When a day's proposals are made, Seoul time: after the US close, before the next session. */
         val PROPOSE_AT: LocalTime = LocalTime.of(9, 0)
-
-        /** Far enough back to cross a long weekend when looking for the last close before a session. */
-        const val LOOKBACK_DAYS = 10L
 
         /** How long a failed proposal waits before the next try. */
         val RETRY_AFTER: Duration = Duration.ofMinutes(15)
